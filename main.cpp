@@ -52,7 +52,7 @@ vector<fs::path> collect_files(string dir);
 void remove_files(vector<fs::path> files, string dir);
 
 
-//clock_t start_time, end_time;
+clock_t start_time, end_time;
 int main()
 {
 

@@ -1,0 +1,13 @@
+{
+  "version": "0.2.1",
+  "defaults": {},
+  "configurations": [
+    {
+      "type": "native",
+      "name": "HybridManufacturing (根目录启动)",
+      "project": "CMakeLists.txt",
+      "projectTarget": "HybridManufacturing",
+      "currentDir": "${workspaceRoot}"
+    }
+  ]
+}

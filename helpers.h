@@ -2,40 +2,14 @@
 #ifndef HELPERS_H_
 #define HELPERS_H_
 
-#include <math.h>
 #include <string>
 #include <iostream>
 #include <fstream>
 
 #include <Eigen/Dense>
 #include <opencv2/core/core.hpp>
-#include <CGAL/Surface_mesh/IO.h>
-#include <CGAL/Polygon_mesh_processing/measure.h>
-#include <CGAL/Polyhedron_3.h>
-#include <CGAL/convex_hull_3.h>
-#include <CGAL/Exact_predicates_inexact_constructions_kernel.h>
-#include <CGAL/Exact_predicates_exact_constructions_kernel.h>
-#include <CGAL/Surface_mesh.h>
-#include <CGAL/Polygon_mesh_processing/corefinement.h>
-#include <CGAL/Polygon_mesh_processing/IO/polygon_mesh_io.h>
-#include <CGAL/squared_distance_3.h>
-#include <CGAL/Simple_cartesian.h>
-#include <CGAL/Polygon_2.h>
-#include "MeshPlaneIntersect.hpp"
-typedef CGAL::Exact_predicates_inexact_constructions_kernel K;
-typedef CGAL::Exact_predicates_exact_constructions_kernel EK;
-typedef CGAL::Surface_mesh<K::Point_3> Mesh;
-typedef MeshPlaneIntersect<double, int> Intersector;
-typedef boost::graph_traits<Mesh>::vertex_descriptor vertex_descriptor;
-typedef boost::graph_traits<Mesh>::halfedge_descriptor halfedge_descriptor;
-typedef boost::graph_traits<Mesh>::edge_descriptor edge_descriptor;
-typedef boost::graph_traits<Mesh>::face_descriptor face_descriptor;
-typedef Mesh::Property_map<vertex_descriptor, EK::Point_3> Exact_point_map;
-typedef K::Point_3     Point_3;
 using namespace std;
 
-namespace PMP = CGAL::Polygon_mesh_processing;
-namespace params = CGAL::parameters;
 
 struct nozzle
 {
@@ -70,22 +44,11 @@ const double MIN_D = -1e18;
 const double dh = 2.0;
 const int num_ori_sample = 200; //200
 
-//const int direction_samplings = 36;
-const int total_directions = 500;
-//const int total_directions = (direction_samplings + 1) * (direction_samplings + 1);
-
-//Unit: mm
-const double printing_width = 2.5;
-//const double support_offset = 0.3 * printing_width;
-const double support_offset = 0.5 * printing_width;    //0.3
-
-const std::string file_name = ".\\data";
-const std::string suffix_stl = ".stl";
-const std::string suffix_txt = ".txt";
+const std::string file_name = ".\\data"; //layer_graph.cpp里面用到了 引用了Mygraph
 
 extern std::vector<std::vector<bool>> is_flatten_area;
 extern std::vector<std::pair<int,int>> index_flatten_layer;
-inline static cv::Point2d GetNormal(cv::Point2d p1, cv::Point2d p2)
+inline static cv::Point2d GetNormal(cv::Point2d p1, cv::Point2d p2) //ConstructPolygonPoints和ConstructPolygonPoints_2里面用到了
 {
 	cv::Point2d res;
 	res.x = -(p2.y - p1.y);
@@ -115,7 +78,7 @@ inline static double Distance3D(cv::Point2d p1, cv::Point2d p2) {
 }
 
 
-inline static std::vector<cv::Point2d> ConstructPolygonPoints(const std::vector<cv::Point2d>& points, double offset) {
+inline static std::vector<cv::Point2d> ConstructPolygonPoints(const std::vector<cv::Point2d>& points, double offset) { //layer_graph里面用了
 	cv::Point2d dir;
 	std::vector<cv::Point2d> polygon_Points;
 	std::vector<cv::Point2d> inside;
@@ -148,7 +111,7 @@ inline static std::vector<cv::Point2d> ConstructPolygonPoints(const std::vector<
 }
 
 
-inline static std::vector<cv::Point2d> ConstructPolygonPoints_2(std::vector<cv::Point2d>& points, double offset) {
+inline static std::vector<cv::Point2d> ConstructPolygonPoints_2(std::vector<cv::Point2d>& points, double offset) { //layer_graph里面用了
 	cv::Point2d dir;
 	std::vector<cv::Point2d> polygon_Points;
 	std::vector<cv::Point2d> inside;
@@ -178,43 +141,6 @@ inline static std::vector<cv::Point2d> ConstructPolygonPoints_2(std::vector<cv::
 	polygon_Points.push_back(points[points.size() - 1]);
 	for (int k = 0; k < outside.size(); k++) polygon_Points.push_back(outside[k]);
 	return polygon_Points;
-}
-
-inline static Eigen::MatrixXd rot(const Eigen::Vector3d& before, const Eigen::Vector3d& after)
-{
-	Eigen::Vector3d v;
-	Eigen::MatrixXd V(3, 3), I(3, 3);
-	I.setIdentity();
-	v = before.cross(after);
-	double s = v.norm();
-	double c = before.dot(after);
-	if (c == 1.0) return I;
-	else if (c == -1.0) return -1 * I;
-	V << 0, -v.z(), v.y(),
-		v.z(), 0, -v.x(),
-		-v.y(), v.x(), 0;
-	return (I + V + V * V / (1.0 + c));
-}
-
-
-inline static int* WriteAllLayers(std::string file_name, int num)
-{
-	ifstream* ifiles = new ifstream[num];
-	int* cont_layers = new int[num];
-	int sum_layers = 0;
-	for (int i = num - 1; i >= 0; i--) {
-		ifiles[i].open(file_name+"_slice_layers_" + to_string(i) + ".txt");
-		ifiles[i] >> cont_layers[i];
-		sum_layers += cont_layers[i];
-	}
-	ofstream ofile(file_name + "_slice_layers_all.txt");
-	std::string lines;
-	ofile << sum_layers << endl;
-	for (int i = num - 1; i >= 0; i--) {
-		while (getline(ifiles[i], lines))
-			ofile << lines << endl;
-	}
-	return cont_layers;
 }
 
 #endif

@@ -362,7 +362,7 @@ void Layer_Graph::GetInitialOPP()
 #else
 
 #endif
-	this->OutputInitialOpp(file_name + "_initial_opp" + suffix_txt);
+	this->OutputInitialOpp(file_name + "_initial_opp.txt");
 }
 
 bool Layer_Graph::IsDepend_collision(int i, int j)

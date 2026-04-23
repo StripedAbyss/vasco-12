@@ -10,7 +10,7 @@ namespace vasco
                            std::vector<VoronoiCell>& outCells,
                            std::vector<Eigen::Vector3d>& outBottomVertices,
                            bool visualize,
-                           const std::string& fileName)
+                           const std::string& fileNameNoExt)
     {
         outCells.clear();
         outBottomVertices.clear();
@@ -168,7 +168,7 @@ namespace vasco
         if (visualize)
         {
             Visual vis;
-            vis.generateModelForRendering_8(all_lines, fileName + "_voronoi.obj");
+            vis.generateModelForRendering_8(all_lines, fileNameNoExt + "_voronoi.obj");
         }
     }
 }

@@ -35,8 +35,6 @@ typedef CGAL::Circular_arc_2<Circular_k>          Circular_arc_2;
 typedef CGAL::Circular_arc_point_2<Circular_k>    Circular_arc_point_2;
 typedef CGAL::CK2_Intersection_traits<Circular_k, Circle_2, Circle_2>::type Intersection_result;
 
-
-using namespace std;
 namespace fs = std::filesystem;
 
 #ifndef VASCO_ROOT_DIR
@@ -60,18 +58,18 @@ int main()
               << std::filesystem::current_path() << std::endl;
     
 	string my_file_path = "data\\transformed_mesh_10K";
-	string my_file_path_duplicate = "data\\transformed_mesh_10K_1";
 	vector<string> my_file;
 	vector<string> my_file_name;
 	string need_extension = ".obj";
 
-	get_need_file(my_file_path_duplicate, my_file, my_file_name, need_extension);
+   get_need_file(my_file_path, my_file, my_file_name, need_extension);
 	
 	for(int i = 0; i < my_file.size(); i ++)
 	{
-	
+		
 		std::string suff = my_file_name[i].substr(0, my_file_name[i].find('.'));
-		std::string file_name = my_file_path + "\\" + suff + "\\" + suff;
+		//std::string file_name = my_file_path + "\\" + suff + "\\" + suff;
+		std::string file_name_without_ext = my_file[i].substr(0, my_file[i].find('.'));
 		
 		float tolerance = 0.05;   //0.05
 		nozzle the_nozzle;
@@ -98,7 +96,7 @@ int main()
 
 		//std::string file_name = ".\\models\\data\\data";   //result is a model name
 		std::string path_obj;
-		ifstream file_normal(file_name + ".txt");
+		ifstream file_normal(file_name_without_ext + ".txt");
 		int num_patches;
 		vector<Eigen::Matrix3d> all_rotMatrix;
 		file_normal >> num_patches;
@@ -107,15 +105,15 @@ int main()
 		Eigen::MatrixXi F;
 		Eigen::MatrixXd N;
 
-		path_obj = file_name + ".obj";
+		path_obj = file_name_without_ext + ".obj";
 		cout << path_obj << endl;
 		igl::readOBJ(path_obj, V, F);
 		vasco::core::getMeshNormal(V, F, N);
 
 
-		Katana::Instance().stl.saveStlFromObj(file_name+"-0_0" + ".stl", V, F);
-		igl::writeOBJ(file_name + "-0_0" + ".obj", V, F); //新加的语句，加了以后beamsearch缺的obj补上了
-		HybridManufacturing HybridManufacturing(file_name, suff,V, F, N);
+		Katana::Instance().stl.saveStlFromObj(file_name_without_ext +"-0_0" + ".stl", V, F);
+		igl::writeOBJ(file_name_without_ext + "-0_0" + ".obj", V, F); //新加的语句，加了以后beamsearch缺的obj补上了
+		HybridManufacturing HybridManufacturing(file_name_without_ext, suff,V, F, N);
 		HybridManufacturing.open_vis_voronoi = 0;
 		HybridManufacturing.open_vis_red_points = 0;
 		HybridManufacturing.open_vis_green_points = 0;
@@ -130,7 +128,7 @@ int main()
 		std::vector<vasco::VoronoiCell> voronoiCells;
 		std::vector<Eigen::Vector3d> bottomVertices;
 		vasco::BuildVoronoiCells(V, F, 2.0, voronoiCells, bottomVertices,
-			HybridManufacturing.open_vis_voronoi, file_name);
+			HybridManufacturing.open_vis_voronoi, file_name_without_ext);
 		HybridManufacturing.InitializeVoronoi(voronoiCells, bottomVertices);
 
 		int flag = HybridManufacturing.CollisionDetectionForSubtractiveManufacturing(cutting_tool);
@@ -148,9 +146,6 @@ int main()
 			remove_files(files, target_file1);
 			// 删除transformed_mesh_10K中的文件
 			fs::remove(src_file);
-			// 删除transformed_mesh_10K_1中的文件
-			fs::remove(my_file_path_duplicate + "\\" + suff + ".obj");
-			fs::remove(my_file_path_duplicate + "\\" + suff + ".stl");
 			continue;
 		}
 		HybridManufacturing.outer_beam_search(the_nozzle, cutting_tool);

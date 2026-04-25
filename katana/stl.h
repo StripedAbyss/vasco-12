@@ -16,8 +16,8 @@
 #include <math.h>
 #include <exception>
 #include <fstream>
-#include <direct.h>
-
+#include <direct.h> 
+                
 #include "config.h"
 
 class STLReader {

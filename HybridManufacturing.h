@@ -24,7 +24,7 @@
 #include<sstream>
 #include<map>
 #include <cmath>
-#include "katana.h"
+#include "katana/katana.h"
 #include"layer_graph.h"
 #include<list>
 

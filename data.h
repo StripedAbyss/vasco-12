@@ -9,7 +9,7 @@
 #include <opencv2/imgproc/imgproc.hpp>
 
 #include "helpers.h"
-#include "datastructures.h"
+#include "katana/datastructures.h"
 class Data
 {
 public:

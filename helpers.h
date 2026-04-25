@@ -64,19 +64,9 @@ inline static cv::Point2d GetNormal(cv::Point2d p1, cv::Point2d p2) //ConstructP
 	return res;
 }
 
-inline static bool JudgePointEqual(cv::Point2d p1, cv::Point2d p2)
-{
-	if (std::abs(p1.x - p2.x) <= eps && std::abs(p1.y - p2.y) <= eps) return true;
-	else return false;
-}
-
-inline static double Distance2D(cv::Point p1, cv::Point p2) {
+inline static double Distance2D(cv::Point p1, cv::Point p2) { //slicer里面用到了
 	return std::sqrt((p1.x - p2.x) * (p1.x - p2.x) + (p1.y - p2.y) * (p1.y - p2.y));
-}
-inline static double Distance3D(cv::Point2d p1, cv::Point2d p2) {
-	return std::sqrt((p1.x - p2.x) * (p1.x - p2.x) + (p1.y - p2.y) * (p1.y - p2.y) + dh * dh);
-}
-
+} 
 
 inline static std::vector<cv::Point2d> ConstructPolygonPoints(const std::vector<cv::Point2d>& points, double offset) { //layer_graph里面用了
 	cv::Point2d dir;

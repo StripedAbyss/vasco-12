@@ -2,10 +2,11 @@
 #ifndef VISUAL_H_
 #define VISUAL_H_
 
-#include "config.h"
+#include "katana/config.h"
 #include <vector>
 
 #include <exception>
+#include <iostream>
 #include <fstream>
 
 #include <Eigen/Dense>

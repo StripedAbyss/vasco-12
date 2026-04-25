@@ -6,10 +6,10 @@
 #include<igl/writeOBJ.h>
 #include <cstdio>
 #include <cstdlib>
-#include "vectornd.h"
-#include "geometry.h"
-#include "importstl.h"
-#include "exportobj.h"
+#include "stl2obj/vectornd.h"
+#include "stl2obj/geometry.h"
+#include "stl2obj/importstl.h"
+#include "stl2obj/exportobj.h"
 #include <Eigen/Dense>
 #include <tuple>
 #include<iostream>
@@ -62,7 +62,7 @@ int main()
 	vector<string> my_file_name;
 	string need_extension = ".obj";
 
-   get_need_file(my_file_path, my_file, my_file_name, need_extension);
+	get_need_file(my_file_path, my_file, my_file_name, need_extension);
 	
 	for(int i = 0; i < my_file.size(); i ++)
 	{

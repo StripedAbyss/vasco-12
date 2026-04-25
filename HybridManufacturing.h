@@ -46,10 +46,10 @@
 #include <cstdio>
 #include <cstdlib>
 
-#include "vectornd.h"
-#include "geometry.h"
-#include "importstl.h"
-#include "exportobj.h"
+#include "stl2obj/vectornd.h"
+#include "stl2obj/geometry.h"
+#include "stl2obj/importstl.h"
+#include "stl2obj/exportobj.h"
 #include <tuple>
 #include <ranges>
 //#include"Point3f.h"

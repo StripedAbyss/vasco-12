@@ -2,7 +2,7 @@
 #include <vector>
 #include <string>
 #include <Eigen/Dense>
-#include "../../vectornd.h"
+//#include "../../vectornd.h"
 #include "../../visual.h"
 
 namespace vasco

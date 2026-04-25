@@ -66,22 +66,22 @@ find_package(OpenCV CONFIG REQUIRED)
 set(SRC_FILES
   data.cpp
   edge.cpp
-  exportobj.cpp
   GeneralMesh.cpp
   HybridManufacturing.cpp
-  importstl.cpp
   layer_graph.cpp
   Mygraph.cpp
   polygon.cpp
   sample_on_ball.cpp
   visual.cpp
-
   katana/config.cpp
   katana/gcode.cpp
   #katana/infill.cpp
   #katana/katana.cpp
   katana/slicer.cpp
   katana/stl.cpp
+  stl2obj/exportobj.cpp
+  stl2obj/importstl.cpp
+  #stl2obj/stl2obj.cpp
   vasco/generateClosedTube.cpp
   vasco/core/VascoUtils.cpp
   vasco/core/GeometryUtils.cpp
@@ -104,6 +104,14 @@ set(HDR_FILES
   #katana/katana.h
   katana/slicer.h
   katana/stl.h
+  stl2obj/exportobj.h
+  stl2obj/geombase.h
+  stl2obj/geometry.h
+  stl2obj/importstl.h
+  stl2obj/kdtree.h
+  stl2obj/vectornd.h
+  stl2obj/visitor.h
+
   vasco/generateClosedTube.h
   vasco/Slicer.h
   vasco/Visualization.h

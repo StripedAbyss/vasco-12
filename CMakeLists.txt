@@ -124,6 +124,7 @@ set(HDR_FILES
   vasco/core/Constants.h
   vasco/core/GeometryUtils.h
   Mygraph.h
+  helpers.h
   edge.h
   sample_on_ball.h
   gco-v3.0/GCoptimization.h      # 若源码内置

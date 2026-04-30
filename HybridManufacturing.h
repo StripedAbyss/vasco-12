@@ -121,31 +121,104 @@ using vasco::GeneralGraph_DArraySArraySpatVarying2;
 class HybridManufacturing
 {
 public:
+	using CutLayer = vector<cv::Point3d>;
+	using CutLayerVector = vector<vector<cv::Point3d>>;
+	using OrientationScores = vector<all_value>;
+
 	HybridManufacturing(std::string file_name, std::string suf, Eigen::MatrixXd V, Eigen::MatrixXi F, Eigen::MatrixXd Normals);
 	~HybridManufacturing();
 
 	//void GetVoronoiCells();              // 原函数保留
-    //void GetVoronoiCells1();          // 移除声明
-    void InitializeVoronoi(const std::vector<VoronoiCell>& cells,
-                           const std::vector<Eigen::Vector3d>& bottom); // 新增
-	
+	//void GetVoronoiCells1();          // 移除声明
+	void InitializeVoronoi(const std::vector<VoronoiCell>& cells,
+		const std::vector<Eigen::Vector3d>& bottom); // 新增
+
 	void InitializePolyscope();
 
+	// --- Core pipeline ---
 	int CollisionDetectionForSubtractiveManufacturing(cutter the_nozzle);
 	void GetALLFragileVertex(SAMPLE_ON_BALL sampling);
-	void detect_collision_with_printing_platform(int& index,vector<int>& candidate_nodes, vector<all_value>& all_calculated_value, vector<vector<cv::Point3d>> all_cut_layers, Eigen::Vector3d ori_now, nozzle the_nozzle);
-	all_value GainMesh(Slicer_2& slicer, vector<vector<cv::Point3d>> all_cut_layers, Eigen::Vector3d vector_after, int height_of_beam_search, int cont_number_of_queue, int index_of_pre_node, vector<int> all_cut_layers_dependency_layer, bool flag_is_continue_block, int id_continue);
-	void CutMesh(vector<vector<cv::Point3d>> all_layers, vector<vector<cv::Point3d>> all_layers_contain,vector<vector<cv::Point3d>> all_cut_layers, Eigen::Vector3d vector_after, int height_of_beam_search, int cont_number_of_queue, int index_of_pre_node, vector<int> all_cut_layers_dependency_layer, bool& jud_outer_beam_search_terminate, vector<TRiangle>& current_remove_triangles, Slicer_2& current_slicer, bool judge_continue_additive,bool flag_is_continue_block,int pre_cont_number_of_queue, vector<bool>& jud_error, int id_node,int id_continue,vector<int> flag_cut_layers_is_hole);
-	void subtractive_accessibility_decomposition(vector<TRiangle> need_detect_triangle, int height_of_beam_search, int cont_number_of_queue, cutter cutting_tool, Slicer_2 current_slicer);
+	void detect_collision_with_printing_platform(
+		int& index,
+		vector<int>& candidate_nodes,
+		OrientationScores& all_calculated_value,
+		CutLayerVector all_cut_layers,
+		Eigen::Vector3d ori_now,
+		nozzle the_nozzle);
+
+	all_value GainMesh(
+		Slicer_2& slicer,
+		CutLayerVector all_cut_layers,
+		Eigen::Vector3d vector_after,
+		int height_of_beam_search,
+		int cont_number_of_queue,
+		int index_of_pre_node,
+		vector<int> all_cut_layers_dependency_layer,
+		bool flag_is_continue_block,
+		int id_continue);
+
+	void CutMesh(
+		CutLayerVector all_layers,
+		CutLayerVector all_layers_contain,
+		CutLayerVector all_cut_layers,
+		Eigen::Vector3d vector_after,
+		int height_of_beam_search,
+		int cont_number_of_queue,
+		int index_of_pre_node,
+		vector<int> all_cut_layers_dependency_layer,
+		bool& jud_outer_beam_search_terminate,
+		vector<TRiangle>& current_remove_triangles,
+		Slicer_2& current_slicer,
+		bool judge_continue_additive,
+		bool flag_is_continue_block,
+		int pre_cont_number_of_queue,
+		vector<bool>& jud_error,
+		int id_node,
+		int id_continue,
+		vector<int> flag_cut_layers_is_hole);
+
+	void subtractive_accessibility_decomposition(
+		vector<TRiangle> need_detect_triangle,
+		int height_of_beam_search,
+		int cont_number_of_queue,
+		cutter cutting_tool,
+		Slicer_2 current_slicer);
+
 	//void subtractive_accessibility_decomposition(vector<TRiangle> need_detect_triangle, int height_of_beam_search, int cont_number_of_queue, cutter cutting_tool, Slicer_2 current_slicer);
 	void subtractive_accessibility_decomposition_within_2_blocks(int height_of_beam_search, cutter cutting_tool);
-	vector<vector<int>> getAccessOri(const Slicer_2& slicer, Slicer_2& slicer_load_patch, vector<vasco::core::Vec3>& all_sample_points_in_triangles, cutter cutting_tool);
+	vector<vector<int>> getAccessOri(
+		const Slicer_2& slicer,
+		Slicer_2& slicer_load_patch,
+		vector<vasco::core::Vec3>& all_sample_points_in_triangles,
+		cutter cutting_tool);
 	void outer_beam_search(nozzle the_nozzle, cutter cutting_tool);
-	void DFS_search(Layer_Graph layer_graph, bool& flag_continue, bool previous_is_continue, vector<bool> judge_S_be_searched, vector<bool> judge_covering_points_be_searched, bool& jud_admit);
+
+	// --- Graph search ---
+	void DFS_search(
+		Layer_Graph layer_graph,
+		bool& flag_continue,
+		bool previous_is_continue,
+		vector<bool> judge_S_be_searched,
+		vector<bool> judge_covering_points_be_searched,
+		bool& jud_admit);
 	//vector<vector<vector<cv::Point3d>>> DFS_search(Layer_Graph layer_graph, vector<vector<int>>& final_pathes_include_S, vector<vector<int>>& final_pathes_include_sample_points, vector<bool> judge_S_be_searched, vector<vector<int>>& all_cut_layers, vector<vector<int>>& all_cut_layers_dependency_layer, vector<vector<int>>& final_paths_include_covering_points, vector<bool> judge_covering_points_be_searched, vector<vector<area_S>> ori_all_the_covering_points);
-	void sort_candidate_nodes(vector<int>& candidate_nodes, vector<vector<vector<cv::Point3d>>> Tree_nodes, vector<vector<int>> final_pathes_include_S, vector<all_value>& all_calculated_value, vector<vector<int>> Tree_nodes_cut_layers, int pre_tree_nodes[], vector<double> Tree_nodes_larger_base, vector<vector<int>> final_pathes_include_covering_points, int height_of_beam_search, vector<vector<Eigen::Vector3d>> save_ori, vector<all_value>& pure_value, int id_continue);
+	void sort_candidate_nodes(
+		vector<int>& candidate_nodes,
+		vector<vector<vector<cv::Point3d>>> Tree_nodes,
+		vector<vector<int>> final_pathes_include_S,
+		OrientationScores& all_calculated_value,
+		vector<vector<int>> Tree_nodes_cut_layers,
+		int pre_tree_nodes[],
+		vector<double> Tree_nodes_larger_base,
+		vector<vector<int>> final_pathes_include_covering_points,
+		int height_of_beam_search,
+		vector<vector<Eigen::Vector3d>> save_ori,
+		OrientationScores& pure_value,
+		int id_continue);
 	void sort_candidate_nodes(vector<int>& candidate_nodes, vector<vector<int>> Tree_nodes_for_S);
-	void subtractive_remove_output(const vector<TRiangle> &need_detect_triangle, const Slicer_2 &current_slicer, int height_of_beam_search);
+	void subtractive_remove_output(const vector<TRiangle>& need_detect_triangle, const Slicer_2& current_slicer, int height_of_beam_search);
+
+	// --- Visualization switches ---
 	bool open_vis_voronoi;
 	bool open_vis_red_points;
 	bool open_vis_green_points;

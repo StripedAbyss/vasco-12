@@ -1,4 +1,3 @@
-#include <iostream>
 #include <filesystem>
 //#include <igl/opengl/glfw/Viewer.h>
 #include<igl/readOBJ.h>
@@ -56,19 +55,21 @@ int main()
 
     std::cout << "[Debug] Current Working Directory: " 
               << std::filesystem::current_path() << std::endl;
-    
-	string my_file_path = "data\\transformed_mesh_10K";
-	string my_file_path_duplicate = "data\\transformed_mesh_10K_1";
-	vector<string> my_file;
-	vector<string> my_file_name;
-	string need_extension = ".obj";
 
-	get_need_file(my_file_path_duplicate, my_file, my_file_name, need_extension);
-	
-	for(int i = 0; i < my_file.size(); i ++)
+	const std::string iniPath = "input_files.ini";
+	const IniData ini = LoadIni(iniPath);
+	const std::string my_file_path = GetIniString(ini, "Input", "BaseDir", "data\\transformed_mesh_10K");
+	const std::vector<std::string> my_file_name = GetIniStringList(ini, "Input", "FileNames");
+
+	if (my_file_name.empty()) {
+		std::cerr << "[main] No input file names found in " << iniPath << std::endl;
+		return 1;
+	}
+
+	for (int i = 0; i < my_file_name.size(); i++)
 	{
 		
-		std::string suff = my_file_name[i].substr(0, my_file_name[i].find('.'));
+        std::string suff = my_file_name[i];
 		std::string file_name = my_file_path + "\\" + suff + "\\" + suff;
 		//std::string file_name_without_ext = my_file[i].substr(0, my_file[i].find('.'));
 		

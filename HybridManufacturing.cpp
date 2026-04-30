@@ -175,8 +175,8 @@ int HybridManufacturing::CollisionDetectionForSubtractiveManufacturing(cutter th
 				cont_accessible_points++;
 				continue;
 			}
-			cont_unaccessible_points++; 
-			
+			cont_unaccessible_points++;
+
 			if (!all_voronoi_cells[i].is_available) {
 				continue;
 			}
@@ -487,7 +487,13 @@ void HybridManufacturing::GetALLFragileVertex(SAMPLE_ON_BALL sampling)
 	}
 }
 
-void HybridManufacturing::detect_collision_with_printing_platform(int& index, vector<int>& candidate_nodes, vector<all_value>& all_calculated_value, vector<vector<cv::Point3d>> all_cut_layers, Eigen::Vector3d ori_now, nozzle the_nozzle)
+void HybridManufacturing::detect_collision_with_printing_platform(
+	int& index,
+	vector<int>& candidate_nodes,
+	OrientationScores& all_calculated_value,
+	CutLayerVector all_cut_layers,
+	Eigen::Vector3d ori_now,
+	nozzle the_nozzle)
 {
 
 	cv::Point3d center_point(0, 0, 0);
@@ -532,7 +538,16 @@ void HybridManufacturing::detect_collision_with_printing_platform(int& index, ve
 	}
 }
 
-all_value HybridManufacturing::GainMesh(Slicer_2& slicer, vector<vector<cv::Point3d>> all_cut_layers, Eigen::Vector3d vector_after, int height_of_beam_search, int cont_number_of_queue, int index_of_pre_node, vector<int> all_cut_layers_dependency_layer, bool flag_is_continue_block, int id_continue)
+all_value HybridManufacturing::GainMesh(
+	Slicer_2& slicer,
+	CutLayerVector all_cut_layers,
+	Eigen::Vector3d vector_after,
+	int height_of_beam_search,
+	int cont_number_of_queue,
+	int index_of_pre_node,
+	vector<int> all_cut_layers_dependency_layer,
+	bool flag_is_continue_block,
+	int id_continue)
 {
 	clock_t start_time, end_time;
 
@@ -949,7 +964,7 @@ std::vector<std::vector<int>> HybridManufacturing::EvaluateMergedPatchToolCollis
 	const int face_count = static_cast<int>(merged_patch.triangles.size());
 	const int ori_count = static_cast<int>(sampling_subtractive.sample_points.size());
 
-    // face x orientation: -1 表示无碰撞；>=0 表示碰撞面的最大 patch_index
+	// face x orientation: -1 表示无碰撞；>=0 表示碰撞面的最大 patch_index
 	std::vector<std::vector<int>> min_collision_patch_matrix(face_count, std::vector<int>(ori_count, -1));
 	if (face_count == 0 || ori_count == 0) {
 		return min_collision_patch_matrix;
@@ -1039,14 +1054,14 @@ std::vector<std::vector<int>> HybridManufacturing::EvaluateMergedPatchToolCollis
 			normals[i] = n;
 		}
 
-       // 计算：刀尖在第 i 面采样点、方向 ori 时，碰撞到的最大 patch_index
+		// 计算：刀尖在第 i 面采样点、方向 ori 时，碰撞到的最大 patch_index
 		for (int i = 0; i < face_count; ++i) {
 			Eigen::Vector3d center_point;
 			center_point.x() = temp_samples[i](0, 0) + cutting_tool.cylinder_r * normals[i].x();
 			center_point.y() = temp_samples[i](1, 0) + cutting_tool.cylinder_r * normals[i].y();
 			center_point.z() = temp_samples[i](2, 0) + cutting_tool.cylinder_r * normals[i].z();
 
-            int max_patch_idx = std::numeric_limits<int>::min();
+			int max_patch_idx = std::numeric_limits<int>::min();
 			bool has_collision = false;
 
 			for (int ii = 0; ii < face_count; ++ii) {
@@ -1056,7 +1071,7 @@ std::vector<std::vector<int>> HybridManufacturing::EvaluateMergedPatchToolCollis
 				if (CheckToolCollisionWithCell(center_point, temp_faces[ii], max_z_of_faces[ii], cutting_tool, 30.0, 3.0)) {
 					has_collision = true;
 					if (ii < static_cast<int>(merged_face_source_patch_id.size())) {
-                       max_patch_idx = std::max(max_patch_idx, merged_face_source_patch_id[ii]);
+						max_patch_idx = std::max(max_patch_idx, merged_face_source_patch_id[ii]);
 					}
 				}
 			}
@@ -1071,7 +1086,7 @@ std::vector<std::vector<int>> HybridManufacturing::EvaluateMergedPatchToolCollis
 		}
 	}
 
-  std::vector<int> min_collision_patch_per_face(face_count, -1);
+	std::vector<int> min_collision_patch_per_face(face_count, -1);
 	for (int i = 0; i < face_count; ++i) {
 		int row_min = std::numeric_limits<int>::max();
 		for (int ori = 0; ori < ori_count; ++ori) {
@@ -1250,7 +1265,25 @@ Slicer_2 HybridManufacturing::MergeBlockPatchesWithDedup(
 }
 
 
-void HybridManufacturing::CutMesh(vector<vector<cv::Point3d>> all_layers, vector<vector<cv::Point3d>> all_layers_contain, vector<vector<cv::Point3d>> all_cut_layers, Eigen::Vector3d vector_after, int height_of_beam_search, int cont_number_of_queue, int index_of_pre_node, vector<int> all_cut_layers_dependency_layer, bool& jud_outer_beam_search_terminate, vector<TRiangle>& current_remove_triangles, Slicer_2& current_slicer, bool judge_continue_additive, bool flag_is_continue_block, int pre_cont_number_of_queue, vector<bool>& jud_error, int id_node, int id_continue, vector<int> flag_cut_layers_is_hole)
+void HybridManufacturing::CutMesh(
+	CutLayerVector all_layers,
+	CutLayerVector all_layers_contain,
+	CutLayerVector all_cut_layers,
+	Eigen::Vector3d vector_after,
+	int height_of_beam_search,
+	int cont_number_of_queue,
+	int index_of_pre_node,
+	vector<int> all_cut_layers_dependency_layer,
+	bool& jud_outer_beam_search_terminate,
+	vector<TRiangle>& current_remove_triangles,
+	Slicer_2& current_slicer,
+	bool judge_continue_additive,
+	bool flag_is_continue_block,
+	int pre_cont_number_of_queue,
+	vector<bool>& jud_error,
+	int id_node,
+	int id_continue,
+	vector<int> flag_cut_layers_is_hole)
 {
 	bool using_solid_model = true;
 
@@ -2013,7 +2046,12 @@ void HybridManufacturing::CutMesh(vector<vector<cv::Point3d>> all_layers, vector
 	return;
 }
 
-void HybridManufacturing::subtractive_accessibility_decomposition(vector<TRiangle> need_detect_triangle, int height_of_beam_search, int cont_number_of_queue, cutter cutting_tool, Slicer_2 current_slicer)
+void HybridManufacturing::subtractive_accessibility_decomposition(
+	vector<TRiangle> need_detect_triangle,
+	int height_of_beam_search,
+	int cont_number_of_queue,
+	cutter cutting_tool,
+	Slicer_2 current_slicer)
 {
 	cutting_tool.cylinder_r = 1.5;
 	cutting_tool.cylinder_height = 27;
@@ -2445,13 +2483,13 @@ void HybridManufacturing::subtractive_accessibility_decomposition_within_2_block
 
 					a = std::max(1, std::min(a, block_count));
 
-                 // 按 [a..b] 添加标签，若 a>b 不添加并提示
+					// 按 [a..b] 添加标签，若 a>b 不添加并提示
 					if (a > b) {
 						++warn_a_lt_b;
 						continue;
 					}
 
-                    for (int p = a; p <= b; ++p) {
+					for (int p = a; p <= b; ++p) {
 						const int lid = encode_label(p, ori);
 						data_value[i][lid] = 0;
 						++feasible_cnt;
@@ -2605,7 +2643,7 @@ void HybridManufacturing::subtractive_accessibility_decomposition_within_2_block
 						<< ", invalid_vertices=" << invalid_vertices << std::endl;
 				}
 
-                // polyscope: 按 patch_id 拆分 mesh，并设置固定颜色
+				// polyscope: 按 patch_id 拆分 mesh，并设置固定颜色
 				std::vector<Eigen::Vector3d> patch_arrow_points;
 				std::vector<cv::Point3d> patch_arrow_dirs;
 				std::vector<std::vector<double>> patch_arrow_colors;

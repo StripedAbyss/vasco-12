@@ -122,7 +122,7 @@ int HybridManufacturing::CollisionDetectionForSubtractiveManufacturing(cutter th
 		//all_normal_of_triangles_in_cells.resize(all_voronoi_cells.size());
 		all_normal_of_cells.resize(all_voronoi_cells.size());
 
-		vector<vector<cv::Point3d>> temp_vis;
+		vector<vector<Eigen::Vector3d>> temp_vis;
 		for (int i = 0; i < all_voronoi_cells.size(); i++) {
 			if (all_voronoi_cells[i].is_available == true) {
 				//all_normal_of_triangles_in_cells[i].resize(all_voronoi_cells[i].all_points_in_polygon.size());
@@ -142,10 +142,13 @@ int HybridManufacturing::CollisionDetectionForSubtractiveManufacturing(cutter th
 
 				all_voronoi_cells[i].all_normal_in_all_ori.push_back(all_normal_of_cells[i]);	//将该采样方向下的法向量存入all_voronoi_cells的all_normal_in_all_ori中
 
-				vector<cv::Point3d> temp_vec;
+				vector<Eigen::Vector3d> temp_vec;
 				temp_vis.push_back(temp_vec);
-				cv::Point3d v_site = cv::Point3d(temp_V[all_voronoi_cells[i].site](0, 0), temp_V[all_voronoi_cells[i].site](1, 0), temp_V[all_voronoi_cells[i].site](2, 0));
-				cv::Point3d v_normal = cv::Point3d(all_normal_of_cells[i].x() * 3 + v_site.x, all_normal_of_cells[i].y() * 3 + v_site.y, all_normal_of_cells[i].z() * 3 + v_site.z);
+				Eigen::Vector3d v_site(
+					temp_V[all_voronoi_cells[i].site](0, 0),
+					temp_V[all_voronoi_cells[i].site](1, 0),
+					temp_V[all_voronoi_cells[i].site](2, 0));
+				Eigen::Vector3d v_normal = v_site + all_normal_of_cells[i] * 3.0;
 				temp_vis[temp_vis.size() - 1].push_back(v_site);
 				temp_vis[temp_vis.size() - 1].push_back(v_normal);
 			}
@@ -496,15 +499,11 @@ void HybridManufacturing::detect_collision_with_printing_platform(
 	nozzle the_nozzle)
 {
 
-	cv::Point3d center_point(0, 0, 0);
+	Eigen::Vector3d center_point(0.0, 0.0, 0.0);
 	for (int i = 0; i < V_bottom.size(); i++) {
-		center_point.x += V_bottom[i].x();
-		center_point.y += V_bottom[i].y();
-		center_point.z += V_bottom[i].z();
+		center_point += V_bottom[i];
 	}
-	center_point.x /= V_bottom.size();
-	center_point.y /= V_bottom.size();
-	center_point.z /= V_bottom.size();
+	center_point /= V_bottom.size();
 	double circle_r = 160;
 
 	if (ori_now.x() == 0 && ori_now.y() == 0 && ori_now.z() == 1)
@@ -528,7 +527,7 @@ void HybridManufacturing::detect_collision_with_printing_platform(
 
 	for (int i = 0; i < rotate_all_cut_layers.size(); i++) {
 		for (int j = 0; j < rotate_all_cut_layers[i].size(); j++) {
-			if ((abs(rotate_all_cut_layers[i][j](2, 0) - center_point.z) < the_nozzle.lowwer_surface_r) && (pow(rotate_all_cut_layers[i][j](0, 0) - center_point.x, 2) + pow(rotate_all_cut_layers[i][j](1, 0) - center_point.y, 2) - pow(circle_r, 2) < 0)) {
+			if ((abs(rotate_all_cut_layers[i][j](2, 0) - center_point.z()) < the_nozzle.lowwer_surface_r) && (pow(rotate_all_cut_layers[i][j](0, 0) - center_point.x(), 2) + pow(rotate_all_cut_layers[i][j](1, 0) - center_point.y(), 2) - pow(circle_r, 2) < 0)) {
 				candidate_nodes.erase(candidate_nodes.begin() + index);
 				all_calculated_value.erase(all_calculated_value.begin() + index);
 				index--;

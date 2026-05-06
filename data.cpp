@@ -3,7 +3,7 @@
 void Data::ReadData(vector<vector<vector<Vertex>>> all_slice_points, vector<vector<vector<Vertex>>> all_slice_points_contain)
 {
 	int total_layer, s_num, p_num;
-	double x, y, z,x2,y2;
+	double x, y, z, x2, y2;
 	total_layer = all_slice_points.size();
 	this->slice_points.resize(total_layer);
 	this->slice_points_contain.resize(total_layer);
@@ -25,28 +25,28 @@ void Data::ReadData(vector<vector<vector<Vertex>>> all_slice_points, vector<vect
 				x = all_slice_points[i][j][k].x;
 				y = all_slice_points[i][j][k].y;
 				z = all_slice_points[i][j][k].z;
-				this->slice_points[i][j].push_back(cv::Point2d(x, y));
+				this->slice_points[i][j].push_back(Eigen::Vector2d(x, y));
 				this->z_value[i][j].push_back(z);
 			}
 			if (all_slice_points_contain[i][j].size() != 0) {
 				for (int k = 0; k < all_slice_points_contain[i][j].size(); k++) {
 					x2 = all_slice_points_contain[i][j][k].x;
 					y2 = all_slice_points_contain[i][j][k].y;
-					this->slice_points_contain[i][j].push_back(cv::Point2d(x2, y2));
+					this->slice_points_contain[i][j].push_back(Eigen::Vector2d(x2, y2));
 				}
 			}
 
 			// avoid the segment only has one point
 			if (p_num == 1) {
-				this->slice_points[i][j].push_back(cv::Point2d(x + 1, y + 1));
+				this->slice_points[i][j].push_back(Eigen::Vector2d(x + 1, y + 1));
 				this->z_value[i][j].push_back(z);
 			}
 			if (IsContour(i, j)) {
 
 				this->is_contour[i][j] = true;
 			}
-			this->adjacent_points[i][j].push_back(std::make_pair(cv::Point3d(-1, -1, -1), cv::Point3d(-1, -1, -1)));
-			this->adjacent_points[i][j].push_back(std::make_pair(cv::Point3d(-1, -1, -1), cv::Point3d(-1, -1, -1)));
+			this->adjacent_points[i][j].push_back(std::make_pair(Eigen::Vector3i(-1, -1, -1), Eigen::Vector3i(-1, -1, -1)));
+			this->adjacent_points[i][j].push_back(std::make_pair(Eigen::Vector3i(-1, -1, -1), Eigen::Vector3i(-1, -1, -1)));
 		}
 	}
 	SetIndexMapping();
@@ -66,11 +66,11 @@ void Data::SetIndexMapping()
 
 bool Data::IsContour(int i, int j)
 {
-	
-	cv::Point2d p1 = this->slice_points[i][j][0];
-	cv::Point2d p2 = this->slice_points[i][j][this->slice_points[i][j].size() - 1];
+
+	Eigen::Vector2d p1 = this->slice_points[i][j][0];
+	Eigen::Vector2d p2 = this->slice_points[i][j][this->slice_points[i][j].size() - 1];
 	//std::cout << i << " " << j << " " << p1 << " " << p2 << std::endl;
 	//if (JudgePointEqual(p1, p2)) return true;
-	if (std::abs(p1.x - p2.x) <= 2 && std::abs(p1.y - p2.y) <= 2) return true;
- 	else return false;
+	if (std::abs(p1.x() - p2.x()) <= 2 && std::abs(p1.y() - p2.y()) <= 2) return true;
+	else return false;
 }

@@ -98,7 +98,7 @@ private:
 	bool** has_subtractive_collision_dependency;
 	vector<vector<int>> all_blocks;
 	std::vector<std::vector<std::vector<int>>> all_solutions;
-	
+
 	int node;
 	int* pre_tree_index;
 	std::vector<std::vector<int>> tree_node;
@@ -108,31 +108,35 @@ private:
 };
 
 
-inline static cv::Point2d GetNormal(cv::Point2d p1, cv::Point2d p2) //ConstructPolygonPoints和ConstructPolygonPoints_2里面用到了
+inline static Eigen::Vector2d GetNormal(Eigen::Vector2d p1, Eigen::Vector2d p2) //ConstructPolygonPoints和ConstructPolygonPoints_2里面用到了
 {
-	cv::Point2d res;
-	res.x = -(p2.y - p1.y);
-	res.y = (p2.x - p1.x);
+	Eigen::Vector2d res;
+	res.x() = -(p2.y() - p1.y());
+	res.y() = (p2.x() - p1.x());
 	double norm = std::sqrt(res.dot(res));
 	if (norm <= eps) {
 		//std::cout << "divide 0 occur !!!!!!!!!!!!!!!!!!!!!!!!!!!!!" << std::endl;
 		//std::cout << p1 << " " << p2 << std::endl;
 		return res;
 	}
-	res.x /= norm;
-	res.y /= norm;
+	res.x() /= norm;
+	res.y() /= norm;
 	return res;
 }
 
-inline static double Distance2D(cv::Point p1, cv::Point p2) { //slicer里面用到了
+inline static double Distance2D(Eigen::Vector2d p1, Eigen::Vector2d p2) {
+	return std::sqrt((p1.x() - p2.x()) * (p1.x() - p2.x()) + (p1.y() - p2.y()) * (p1.y() - p2.y()));
+}
+
+inline static double Distance2D(cv::Point2d p1, cv::Point2d p2) {  //slicer里面用到了
 	return std::sqrt((p1.x - p2.x) * (p1.x - p2.x) + (p1.y - p2.y) * (p1.y - p2.y));
 }
 
-inline static std::vector<cv::Point2d> ConstructPolygonPoints(const std::vector<cv::Point2d>& points, double offset) { //layer_graph里面用了
-	cv::Point2d dir;
-	std::vector<cv::Point2d> polygon_Points;
-	std::vector<cv::Point2d> inside;
-	std::vector<cv::Point2d> outside;
+inline static std::vector<Eigen::Vector2d> ConstructPolygonPoints(const std::vector<Eigen::Vector2d>& points, double offset) { //layer_graph里面用了
+	Eigen::Vector2d dir;
+	std::vector<Eigen::Vector2d> polygon_Points;
+	std::vector<Eigen::Vector2d> inside;
+	std::vector<Eigen::Vector2d> outside;
 	for (int k = 0; k < points.size(); k++) {
 		if (k == points.size() - 1) {
 			dir = GetNormal(points[points.size() - 2], points[points.size() - 1]);
@@ -161,11 +165,11 @@ inline static std::vector<cv::Point2d> ConstructPolygonPoints(const std::vector<
 }
 
 
-inline static std::vector<cv::Point2d> ConstructPolygonPoints_2(std::vector<cv::Point2d>& points, double offset) { //layer_graph里面用了
-	cv::Point2d dir;
-	std::vector<cv::Point2d> polygon_Points;
-	std::vector<cv::Point2d> inside;
-	std::vector<cv::Point2d> outside;
+inline static std::vector<Eigen::Vector2d> ConstructPolygonPoints_2(std::vector<Eigen::Vector2d>& points, double offset) { //layer_graph里面用了
+	Eigen::Vector2d dir;
+	std::vector<Eigen::Vector2d> polygon_Points;
+	std::vector<Eigen::Vector2d> inside;
+	std::vector<Eigen::Vector2d> outside;
 	for (int k = 0; k < points.size(); k++) {
 		if (k == points.size() - 1) {
 			dir = GetNormal(points[points.size() - 2], points[points.size() - 1]);

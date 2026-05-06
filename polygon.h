@@ -5,26 +5,21 @@
 
 #include <vector>
 
-#include <opencv2/core/core.hpp>
-#include <opencv2/imgproc/imgproc.hpp>
-#include <opencv2/highgui/highgui.hpp>
-
-
 #include "helpers.h"
 
 class Polygon
 {
 public:
-	Polygon(const std::vector<cv::Point2d>& 
+	Polygon(const std::vector<Eigen::Vector2d>& 
 	
 	
 	);
 	~Polygon();
 
-	bool JudgePointInside(cv::Point2d p);
+	bool JudgePointInside(Eigen::Vector2d p);
 	void Draw(int index);
 private:
-	std::vector<cv::Point2d> points;
+	std::vector<Eigen::Vector2d> points;
 	double minx, maxx, miny, maxy;
 	int find = 0;
 };

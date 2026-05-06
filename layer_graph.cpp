@@ -126,9 +126,9 @@ void Layer_Graph::BuildLayerGraph(nozzle the_nozzle)
 {
 	clock_t start_time, end_time;
 	start_time = clock();
-	vector<pair<int, int>> temp_collision_edges;
+    vector<pair<int, int>> temp_collision_edges;
 	vector<pair<int, int>> all_id_layers;
-	cv::Point2d dir;
+	Eigen::Vector2d dir;
 	for (int i = 1; i < data.slice_points.size(); i++) {
 		//get (i-1) layer segment's contour
 		std::vector<Polygon> Last_layer_polygons;
@@ -171,7 +171,7 @@ void Layer_Graph::BuildLayerGraph(nozzle the_nozzle)
 					}
 					for (int k = 0; k < data.slice_points[i][j].size(); k+=20) { //step == 2
 						for (int kk = 0; kk < data.slice_points[ii][jj].size(); kk+=20) {
-							if (pow(data.slice_points[ii][jj][kk].x - data.slice_points[i][j][k].x,2) + pow(data.slice_points[ii][jj][kk].y - data.slice_points[i][j][k].y,2) - pow(circle_r,2) < 0) {
+                      if (pow(data.slice_points[ii][jj][kk].x() - data.slice_points[i][j][k].x(),2) + pow(data.slice_points[ii][jj][kk].y() - data.slice_points[i][j][k].y(),2) - pow(circle_r,2) < 0) {
 								jud_collision = true;
 								break;
 							}
@@ -249,22 +249,22 @@ void Layer_Graph::BuildDependencyGraph(std::vector<cv::Point3d>& all_points)
 	for (int i = 0;i < 3000;i++)
 		for (int j = 0;j < 3000;j++)
 			Dependen_edges[i][j] = false;
-	std::vector<cv::Point2d> all_2d_points;
+	std::vector<Eigen::Vector2d> all_2d_points;
 	std::vector<Polygon> All_polygons;
 	for (int i = 0;i < all_points.size();i++) {
-		cv::Point2d temp_point(all_points[i].x, all_points[i].y);
+		Eigen::Vector2d temp_point(all_points[i].x, all_points[i].y);
 		all_2d_points.push_back(temp_point);
 
-		std::vector<cv::Point2d> temp_2d_point;
-		cv::Point2d temp_2d_one_point = all_2d_points[i];
+		std::vector<Eigen::Vector2d> temp_2d_point;
+		Eigen::Vector2d temp_2d_one_point = all_2d_points[i];
 		double r = 0.2;
 		//temp_2d_point.push_back(temp_2d_one_point);
 		//temp_2d_one_point.x -= r;
-		temp_2d_one_point.y -= 2 *r;
+		temp_2d_one_point.y() -= 2 * r;
 		temp_2d_point.push_back(temp_2d_one_point);
-		temp_2d_one_point.y += 2*r;
+		temp_2d_one_point.y() += 2 * r;
 		temp_2d_point.push_back(temp_2d_one_point);
-		temp_2d_one_point.y += 2*r;
+		temp_2d_one_point.y() += 2 * r;
 		temp_2d_point.push_back(temp_2d_one_point);
 		//temp_2d_one_point.x += r;
 		//temp_2d_one_point.x += r;
@@ -1119,7 +1119,7 @@ void Layer_Graph::OutputInitialOpp(const std::string& file_name)
 			n = data.index[initial_opp_info[i][j]].second;
 			dstream << data.slice_points[m][n].size() << std::endl;
 			for (int k = 0; k < data.slice_points[m][n].size(); k++) {
-				dstream << this->data.slice_points[m][n][k].x << " " << this->data.slice_points[m][n][k].y << " " << data.z_value[m][n][k] << std::endl;
+                dstream << this->data.slice_points[m][n][k].x() << " " << this->data.slice_points[m][n][k].y() << " " << data.z_value[m][n][k] << std::endl;
 			}
 		}
 	}
@@ -1183,7 +1183,7 @@ void Layer_Graph::CollisionDetectionForAdditiveManufacturing(nozzle the_nozzle)
 					}
 					for (int k = 0; k < data.slice_points[i][j].size(); k += 20) { 
 						for (int kk = 0; kk < data.slice_points[ii][jj].size(); kk += 20) {
-							if (pow(data.slice_points[ii][jj][kk].x - data.slice_points[i][j][k].x, 2) + pow(data.slice_points[ii][jj][kk].y - data.slice_points[i][j][k].y, 2) - pow(circle_r, 2) < 0) {
+							if (pow(data.slice_points[ii][jj][kk].x() - data.slice_points[i][j][k].x(), 2) + pow(data.slice_points[ii][jj][kk].y() - data.slice_points[i][j][k].y(), 2) - pow(circle_r, 2) < 0) {
 								jud_collision = true;
 								break;
 							}

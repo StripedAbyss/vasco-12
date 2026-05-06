@@ -3613,7 +3613,7 @@ void HybridManufacturing::DFS_search(Layer_Graph layer_graph, bool& flag_continu
 						bottom_point_of_layer[temp_num] = layer_graph.data.slice_points[i][j][k].y;
 					if (layer_graph.data.slice_points[i][j][k].y > top_point_of_layer[temp_num])
 						top_point_of_layer[temp_num] = layer_graph.data.slice_points[i][j][k].y;*/
-				vec_points_2d[temp_num].push_back(Point_2(layer_graph.data.slice_points[i][j][k].x, layer_graph.data.slice_points[i][j][k].y));
+             vec_points_2d[temp_num].push_back(Point_2(layer_graph.data.slice_points[i][j][k].x(), layer_graph.data.slice_points[i][j][k].y()));
 			}
 			vec_polygon[temp_num] = Polygon_2(vec_points_2d[temp_num].begin(), vec_points_2d[temp_num].end());
 			//std::cout << "!!@@##" << std::endl;
@@ -3861,19 +3861,19 @@ void HybridManufacturing::DFS_search(Layer_Graph layer_graph, bool& flag_continu
 		all_selected_points.push_back(temp_vec_1);
 		all_selected_points_contain.push_back(temp_vec_1);
 		for (int j = 0; j < final_pathes[i].size(); j++) {
-			vector<cv::Point3d> temp_vec_2;
+     vector<cv::Point3d> temp_vec_2;
 			all_selected_points[i].push_back(temp_vec_2);
 			all_selected_points_contain[i].push_back(temp_vec_2);
 			pair<int, int> index_slice_point = layer_graph.data.index[final_pathes[i][j]];
 			for (int k = 0; k < layer_graph.data.slice_points[index_slice_point.first][index_slice_point.second].size(); k++) {
-				cv::Point3d current_point(layer_graph.data.slice_points[index_slice_point.first][index_slice_point.second][k].x,
-					layer_graph.data.slice_points[index_slice_point.first][index_slice_point.second][k].y,
+                cv::Point3d current_point(layer_graph.data.slice_points[index_slice_point.first][index_slice_point.second][k].x(),
+					layer_graph.data.slice_points[index_slice_point.first][index_slice_point.second][k].y(),
 					layer_graph.data.z_value[index_slice_point.first][index_slice_point.second][k]);
 				all_selected_points[i][j].push_back(current_point);
 			}
 			for (int k = 0; k < layer_graph.data.slice_points_contain[index_slice_point.first][index_slice_point.second].size(); k++) {
-				cv::Point3d current_point(layer_graph.data.slice_points_contain[index_slice_point.first][index_slice_point.second][k].x,
-					layer_graph.data.slice_points_contain[index_slice_point.first][index_slice_point.second][k].y,
+                cv::Point3d current_point(layer_graph.data.slice_points_contain[index_slice_point.first][index_slice_point.second][k].x(),
+					layer_graph.data.slice_points_contain[index_slice_point.first][index_slice_point.second][k].y(),
 					layer_graph.data.z_value[index_slice_point.first][index_slice_point.second][0]);
 				all_selected_points_contain[i][j].push_back(current_point);
 			}

@@ -239,7 +239,7 @@ void Layer_Graph::BuildLayerGraph(nozzle the_nozzle)
 
 
 
-void Layer_Graph::BuildDependencyGraph(std::vector<cv::Point3d>& all_points)
+void Layer_Graph::BuildDependencyGraph(std::vector<Eigen::Vector3d>& all_points)
 {
 	
 	bool** Dependen_edges;
@@ -251,8 +251,8 @@ void Layer_Graph::BuildDependencyGraph(std::vector<cv::Point3d>& all_points)
 			Dependen_edges[i][j] = false;
 	std::vector<Eigen::Vector2d> all_2d_points;
 	std::vector<Polygon> All_polygons;
-	for (int i = 0;i < all_points.size();i++) {
-		Eigen::Vector2d temp_point(all_points[i].x, all_points[i].y);
+ for (int i = 0;i < all_points.size();i++) {
+		Eigen::Vector2d temp_point(all_points[i].x(), all_points[i].y());
 		all_2d_points.push_back(temp_point);
 
 		std::vector<Eigen::Vector2d> temp_2d_point;
@@ -281,9 +281,9 @@ void Layer_Graph::BuildDependencyGraph(std::vector<cv::Point3d>& all_points)
 	}
 	
 	int cont_edges = 0;
-	for (int i = 0;i < all_points.size();i++) {
+ for (int i = 0;i < all_points.size();i++) {
 		for (int j = 0;j < all_points.size();j++) {
-			if (i != j && all_points[j].z < all_points[i].z)
+			if (i != j && all_points[j].z() < all_points[i].z())
 				if (All_polygons[j].JudgePointInside(all_2d_points[i])) {
 					std::pair<int, int> Pair(i, j);
 					Dependen_edges[i][j] = true;

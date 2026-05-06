@@ -384,16 +384,16 @@ void Slicer::buildSegments(vector<Vertex> ori_space_points, std::map<int, int> i
                 mapping_weight = layer.segments[i].adjoint_mappint_point[1].weight;
             }
             //double mapping_weight = 0;
-            cv::Point3d mapping_adjoin_point_1(ori_space_points[ori_index_1].x, ori_space_points[ori_index_1].y, ori_space_points[ori_index_1].z);
-            cv::Point3d mapping_adjoin_point_2(ori_space_points[ori_index_2].x, ori_space_points[ori_index_2].y, ori_space_points[ori_index_2].z);
-            cv::Point3d diff_two_point(mapping_adjoin_point_1- mapping_adjoin_point_2);
-            cv::Point3d mapping_point(mapping_adjoin_point_2 + diff_two_point*mapping_weight);
-                if(i!=0)
-                    out_gcode<<"G1 "<<"X"<< mapping_point.x << " Y" << mapping_point.y << " Z" << mapping_point.z << " E" << E_value<<endl;
-                else
-                    out_gcode << "G0 " << "X" << mapping_point.x << " Y" << mapping_point.y << " Z" << mapping_point.z  << endl;
-            E_value++;
-            current_path.push_back(Eigen::Vector3d(mapping_point.x, mapping_point.y, mapping_point.z));
+			Eigen::Vector3d mapping_adjoin_point_1(ori_space_points[ori_index_1].x, ori_space_points[ori_index_1].y, ori_space_points[ori_index_1].z);
+			Eigen::Vector3d mapping_adjoin_point_2(ori_space_points[ori_index_2].x, ori_space_points[ori_index_2].y, ori_space_points[ori_index_2].z);
+			Eigen::Vector3d diff_two_point(mapping_adjoin_point_1 - mapping_adjoin_point_2);
+			Eigen::Vector3d mapping_point(mapping_adjoin_point_2 + diff_two_point * mapping_weight);
+			if (i != 0)
+				out_gcode << "G1 " << "X" << mapping_point.x() << " Y" << mapping_point.y() << " Z" << mapping_point.z() << " E" << E_value << endl;
+			else
+				out_gcode << "G0 " << "X" << mapping_point.x() << " Y" << mapping_point.y() << " Z" << mapping_point.z() << endl;
+			E_value++;
+			current_path.push_back(Eigen::Vector3d(mapping_point.x(), mapping_point.y(), mapping_point.z()));
         }
         real_path.push_back(current_path);
         continue;//////////////////////////////

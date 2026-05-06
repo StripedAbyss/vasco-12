@@ -352,7 +352,7 @@ void Visual::generateModelForRendering_10(vector<vector<vector<Eigen::Vector3d>>
     mesh1.genResultMesh_2(num_vertex, colors,(file_name).c_str());
 }
 
-void Visual::generateModelForRendering_11(vector<Eigen::Vector3d> points_in_cell, vector<cv::Point3d> normal, vector<vector<double>> colors, string file_name)
+void Visual::generateModelForRendering_11(vector<Eigen::Vector3d> points_in_cell, vector<Eigen::Vector3d> normal, vector<vector<double>> colors, string file_name)
 {
     float radius = 0.2;
     General_Mesh mesh1;
@@ -364,16 +364,10 @@ void Visual::generateModelForRendering_11(vector<Eigen::Vector3d> points_in_cell
         double b = rand() / double(RAND_MAX);
 
         std::vector<Eigen::Vector3d> points;
-        Eigen::Vector3d the_point;
-        the_point.x() = points_in_cell[t].x();
-        the_point.y() = points_in_cell[t].y();
-        the_point.z() = points_in_cell[t].z();
+        Eigen::Vector3d the_point(points_in_cell[t]);
         points.push_back(the_point);
 
-        Eigen::Vector3d the_point_2;
-        the_point_2.x() = points_in_cell[t].x() + normal[t].x * 10;
-        the_point_2.y() = points_in_cell[t].y() + normal[t].y * 10;
-        the_point_2.z() = points_in_cell[t].z() + normal[t].z * 10;
+        Eigen::Vector3d the_point_2(points_in_cell[t] + normal[t] * 10);
         points.push_back(the_point_2);
         insert_Line(mesh1, points, radius);
         num_vertex[t] = mesh1.result_vertex.size();

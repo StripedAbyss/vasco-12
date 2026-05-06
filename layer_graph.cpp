@@ -1309,7 +1309,7 @@ void Layer_Graph::CollisionDetectionForSubtractiveManufacturing(nozzle the_nozzl
 
 	for (int ori = 0; ori < sampling.sample_points.size(); ori++) {
 		Eigen::Vector3d vectorBefore(0, 0, 1);
-		Eigen::Vector3d vectorAfter(sampling.sample_points[ori].x, sampling.sample_points[ori].y, sampling.sample_points[ori].z);
+		Eigen::Vector3d vectorAfter(sampling.sample_points[ori]);
 		rotMatrix = Eigen::Quaterniond::FromTwoVectors(vectorBefore, vectorAfter).toRotationMatrix();
 		std::vector<std::vector<std::vector<Eigen::MatrixXd>>> temp_layers = current_layers;
 
@@ -1388,7 +1388,7 @@ void Layer_Graph::CollisionDetectionForSubtractiveManufacturing(nozzle the_nozzl
 	//*******************************************//
 	for (int ori = 0; ori < sampling.sample_points.size(); ori++) {
 		Eigen::Vector3d vectorBefore(0, 0, 1);
-		Eigen::Vector3d vectorAfter(sampling.sample_points[ori].x, sampling.sample_points[ori].y, sampling.sample_points[ori].z);
+		Eigen::Vector3d vectorAfter(sampling.sample_points[ori]);
 		rotMatrix = Eigen::Quaterniond::FromTwoVectors(vectorBefore, vectorAfter).toRotationMatrix();
 		std::vector<std::vector<std::vector<Eigen::MatrixXd>>> temp_layers = current_layers;
 

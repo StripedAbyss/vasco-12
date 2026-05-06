@@ -37,7 +37,7 @@ public:
     void generateModelForRendering_8(vector<vector<Eigen::Vector3d>> lines, string file_name);
     void generateModelForRendering_9(vector<vector<cv::Point3d>> lines, string file_name);
     void generateModelForRendering_10(vector<vector<vector<Eigen::Vector3d>>> lines, vector<vector<double>>& colors, string file_name);
-    void generateModelForRendering_11(vector<Eigen::Vector3d> points, vector<cv::Point3d> normal, vector<vector<double>> colors,string file_name);
+    void generateModelForRendering_11(vector<Eigen::Vector3d> points, vector<Eigen::Vector3d> normal, vector<vector<double>> colors,string file_name);
     void generateArrows(cv::Point3d normal, string file_name);
     void generateArrows_2(vector<Eigen::Vector3d>points_2, vector<cv::Point3d> normal, string file_name);
 

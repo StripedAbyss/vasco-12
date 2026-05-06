@@ -106,7 +106,7 @@ int HybridManufacturing::CollisionDetectionForSubtractiveManufacturing(cutter th
 		}
 
 		Eigen::Vector3d vectorBefore(0, 0, 1);
-		Eigen::Vector3d vectorAfter(sampling_subtractive.sample_points[ori].x, sampling_subtractive.sample_points[ori].y, sampling_subtractive.sample_points[ori].z);
+		Eigen::Vector3d vectorAfter(sampling_subtractive.sample_points[ori]);
 		rotMatrix = Eigen::Quaterniond::FromTwoVectors(vectorBefore, vectorAfter).toRotationMatrix();	//计算从z轴到采样方向的旋转矩阵
 		for (int i = 0; i < V.rows(); i++)
 			temp_V[i] = rotMatrix.inverse() * temp_V[i];
@@ -245,7 +245,7 @@ int HybridManufacturing::CollisionDetectionForSubtractiveManufacturing(cutter th
 		temp_V_vis = temp_V;
 
 		Eigen::Vector3d vectorBefore(0, 0, 1);
-		Eigen::Vector3d vectorAfter(sampling_subtractive.sample_points[ori].x, sampling_subtractive.sample_points[ori].y, sampling_subtractive.sample_points[ori].z);
+		Eigen::Vector3d vectorAfter(sampling_subtractive.sample_points[ori]);
 		rotMatrix = Eigen::Quaterniond::FromTwoVectors(vectorBefore, vectorAfter).toRotationMatrix();
 		for (int i = 0; i < V.rows(); i++)
 			temp_V[i] = rotMatrix.inverse() * temp_V[i];	//将模型顶点旋转到以采样方向为z轴的坐标系下
@@ -446,7 +446,7 @@ void HybridManufacturing::GetALLFragileVertex(SAMPLE_ON_BALL sampling)
 			temp_V[i](2, 0) = V.row(i).z();
 		}
 		Eigen::Vector3d vectorBefore(0, 0, 1);
-		Eigen::Vector3d vectorAfter(sampling.sample_points[ori].x, sampling.sample_points[ori].y, sampling.sample_points[ori].z);
+		Eigen::Vector3d vectorAfter(sampling.sample_points[ori]);
 		Eigen::Matrix3d rotMatrix = Eigen::Quaterniond::FromTwoVectors(vectorBefore, vectorAfter).toRotationMatrix();
 		for (int i = 0; i < V.rows(); i++)
 			temp_V[i] = rotMatrix.inverse() * temp_V[i];
@@ -1017,10 +1017,7 @@ std::vector<std::vector<int>> HybridManufacturing::EvaluateMergedPatchToolCollis
 		}
 
 		Eigen::Vector3d vectorBefore(0, 0, 1);
-		Eigen::Vector3d vectorAfter(
-			sampling_subtractive.sample_points[ori].x,
-			sampling_subtractive.sample_points[ori].y,
-			sampling_subtractive.sample_points[ori].z);
+		Eigen::Vector3d vectorAfter(sampling_subtractive.sample_points[ori]);
 		vectorAfter.normalize();
 
 		Eigen::Matrix3d rotMatrix = Eigen::Quaterniond::FromTwoVectors(vectorBefore, vectorAfter).toRotationMatrix();
@@ -2124,7 +2121,7 @@ void HybridManufacturing::subtractive_accessibility_decomposition(
 
 		Eigen::Matrix3d rotMatrix;
 		Eigen::Vector3d vectorBefore(0, 0, 1);
-		Eigen::Vector3d vectorAfter(sampling_subtractive.sample_points[ori].x, sampling_subtractive.sample_points[ori].y, sampling_subtractive.sample_points[ori].z);
+		Eigen::Vector3d vectorAfter(sampling_subtractive.sample_points[ori]);
 		vectorAfter.normalize();
 		rotMatrix = Eigen::Quaterniond::FromTwoVectors(vectorBefore, vectorAfter).toRotationMatrix();
 		for (int i = 0; i < temp_new_V_remain.size(); i++)
@@ -2290,10 +2287,10 @@ void HybridManufacturing::subtractive_accessibility_decomposition(
 
 	int cont_patch = 0;
 	vector<Eigen::Vector3d> points_in_cell;
-	vector<cv::Point3d> normals;
+	vector<Eigen::Vector3d> normals;
 	points_in_cell.push_back(Eigen::Vector3d(slicer.positions[need_detect_triangle[0][0]][0], slicer.positions[need_detect_triangle[0][0]][1], slicer.positions[need_detect_triangle[0][0]][2])); //point_in_cell初始放入第一个点
 	normals.push_back(sampling_subtractive.sample_points[result[0]]);
-	ofile << normals[0].x << " " << normals[0].y << " " << normals[0].z << endl;
+	ofile << normals[0].x() << " " << normals[0].y() << " " << normals[0].z() << endl;
 
 
 	for (int i = 0; i < need_detect_triangle.size(); i++) {
@@ -2307,7 +2304,7 @@ void HybridManufacturing::subtractive_accessibility_decomposition(
 			vis_triangles.push_back(temp_tri);
 			points_in_cell.push_back(Eigen::Vector3d(slicer.positions[need_detect_triangle[i][0]][0], slicer.positions[need_detect_triangle[i][0]][1], slicer.positions[need_detect_triangle[i][0]][2]));
 			normals.push_back(sampling_subtractive.sample_points[result[i]]);
-			ofile << normals[normals.size() - 1].x << " " << normals[normals.size() - 1].y << " " << normals[normals.size() - 1].z << endl;
+			ofile << normals[normals.size() - 1].x() << " " << normals[normals.size() - 1].y() << " " << normals[normals.size() - 1].z() << endl;
 		}
 
 		//Eigen::MatrixXd temp_point(3, 1);
@@ -2645,7 +2642,7 @@ void HybridManufacturing::subtractive_accessibility_decomposition_within_2_block
 
 				// polyscope: 按 patch_id 拆分 mesh，并设置固定颜色
 				std::vector<Eigen::Vector3d> patch_arrow_points;
-				std::vector<cv::Point3d> patch_arrow_dirs;
+				std::vector<Eigen::Vector3d> patch_arrow_dirs;
 				std::vector<std::vector<double>> patch_arrow_colors;
 
 				Eigen::Vector3d bb_min(MAX_D, MAX_D, MAX_D), bb_max(MIN_D, MIN_D, MIN_D);
@@ -2699,11 +2696,11 @@ void HybridManufacturing::subtractive_accessibility_decomposition_within_2_block
 					if (center_count > 0) {
 						patch_center /= static_cast<double>(center_count);
 
-						cv::Point3d ori_dir(0.0, 0.0, 1.0);
+						Eigen::Vector3d ori_dir(0.0, 0.0, 1.0);
 						if (ori_id >= 0 && ori_id < static_cast<int>(sampling_subtractive.sample_points.size())) {
 							ori_dir = sampling_subtractive.sample_points[ori_id];
 						}
-						Eigen::Vector3d ori_vec(ori_dir.x, ori_dir.y, ori_dir.z);
+						Eigen::Vector3d ori_vec(ori_dir);
 						double n = ori_vec.norm();
 						if (n < 1e-12) {
 							ori_vec = Eigen::Vector3d(0.0, 0.0, 1.0);
@@ -2716,7 +2713,7 @@ void HybridManufacturing::subtractive_accessibility_decomposition_within_2_block
 						const Eigen::Vector3d arrow_end = arrow_start + ori_vec * arrow_length;
 
 						patch_arrow_points.push_back(arrow_start);
-						patch_arrow_dirs.push_back(cv::Point3d(ori_vec.x(), ori_vec.y(), ori_vec.z()));
+						patch_arrow_dirs.push_back(ori_vec);
 
 						patch_arrow_colors.push_back({ c[0], c[1], c[2] });
 
@@ -2822,7 +2819,7 @@ vector<vector<int>> HybridManufacturing::getAccessOri(const Slicer_2& slicer, Sl
 
 		Eigen::Matrix3d rotMatrix;
 		Eigen::Vector3d vectorBefore(0, 0, 1);
-		Eigen::Vector3d vectorAfter(sampling_subtractive.sample_points[ori].x, sampling_subtractive.sample_points[ori].y, sampling_subtractive.sample_points[ori].z);
+		Eigen::Vector3d vectorAfter(sampling_subtractive.sample_points[ori]);
 		vectorAfter.normalize();
 		rotMatrix = Eigen::Quaterniond::FromTwoVectors(vectorBefore, vectorAfter).toRotationMatrix();
 		for (int i = 0; i < temp_new_V_remain.size(); i++)
@@ -3110,7 +3107,7 @@ void HybridManufacturing::outer_beam_search(nozzle the_nozzle, cutter cutting_to
 			for (int j = 1; j <= ori * 20 / sampling.sample_points.size(); j++)
 				std::cout << "▉";
 
-			Eigen::Vector3d vectorContinue(sampling.sample_points[ori].x, sampling.sample_points[ori].y, sampling.sample_points[ori].z);  //与祖先Node的ori相同时容易出现问题，暂时先避免用相同ori
+			Eigen::Vector3d vectorContinue(sampling.sample_points[ori]);  //与祖先Node的ori相同时容易出现问题，暂时先避免用相同ori
 			int temp_now_last_node = now_last_node;
 			bool jud_continue = false;
 
@@ -3142,7 +3139,7 @@ void HybridManufacturing::outer_beam_search(nozzle the_nozzle, cutter cutting_to
 				V_2[i](2, 0) = V.row(i).z();
 			}
 			Eigen::Vector3d vectorBefore(0, 0, 1);
-			Eigen::Vector3d vectorAfter(sampling.sample_points[ori].x, sampling.sample_points[ori].y, sampling.sample_points[ori].z);
+			Eigen::Vector3d vectorAfter(sampling.sample_points[ori]);
 			rotMatrix = Eigen::Quaterniond::FromTwoVectors(vectorBefore, vectorAfter).toRotationMatrix();
 			for (int i = 0; i < Katana::Instance().vertices.size(); i++)
 				temp_V[i] = rotMatrix.inverse() * temp_V[i];	//将temp_V里的顶点坐标旋转，使得增材打印方向与z轴平行

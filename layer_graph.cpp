@@ -1126,34 +1126,34 @@ void Layer_Graph::OutputInitialOpp(const std::string& file_name)
 	dstream.close();
 }
 
-void Layer_Graph::MappingBackLayers(vector<Eigen::Matrix3d> all_rotMatrix)
-{
-	int current_patch = num_patches-1;
-	int cont_layers = 0;
-	current_layers.clear();
-	current_layers.resize(data.slice_points.size());
-	
-	for (int i = 0; i < data.slice_points.size(); i++) {
-		if (cont_layers == cont_layers_of_patches[current_patch]) {
-			cont_layers = 0;
-			current_patch--;
-		}
-		current_layers[i].resize(data.slice_points[i].size());
-		for (int j = 0; j < data.slice_points[i].size(); j++) {
-			current_layers[i][j].resize(data.slice_points[i][j].size());
-			for (int k = 0; k < data.slice_points[i][j].size(); k++) {
-				current_layers[i][j][k].resize(3,1);
-				current_layers[i][j][k](0, 0) = data.slice_points[i][j][k].x;
-				current_layers[i][j][k](1, 0) = data.slice_points[i][j][k].y;
-				current_layers[i][j][k](2, 0) = data.z_value[i][j][k];
-				current_layers[i][j][k] = all_rotMatrix[num_patches - current_patch -1].inverse() * current_layers[i][j][k];
-			}
-		}	
-		cont_layers++;
-	}
-	//Visual Vis;
-	//Vis.generateModelForRendering(current_layers, file_name);
-}
+//void Layer_Graph::MappingBackLayers(vector<Eigen::Matrix3d> all_rotMatrix)
+//{
+//	int current_patch = num_patches-1;
+//	int cont_layers = 0;
+//	current_layers.clear();
+//	current_layers.resize(data.slice_points.size());
+//	
+//	for (int i = 0; i < data.slice_points.size(); i++) {
+//		if (cont_layers == cont_layers_of_patches[current_patch]) {
+//			cont_layers = 0;
+//			current_patch--;
+//		}
+//		current_layers[i].resize(data.slice_points[i].size());
+//		for (int j = 0; j < data.slice_points[i].size(); j++) {
+//			current_layers[i][j].resize(data.slice_points[i][j].size());
+//			for (int k = 0; k < data.slice_points[i][j].size(); k++) {
+//				current_layers[i][j][k].resize(3,1);
+//				current_layers[i][j][k](0, 0) = data.slice_points[i][j][k].x;
+//				current_layers[i][j][k](1, 0) = data.slice_points[i][j][k].y;
+//				current_layers[i][j][k](2, 0) = data.z_value[i][j][k];
+//				current_layers[i][j][k] = all_rotMatrix[num_patches - current_patch -1].inverse() * current_layers[i][j][k];
+//			}
+//		}	
+//		cont_layers++;
+//	}
+//	//Visual Vis;
+//	//Vis.generateModelForRendering(current_layers, file_name);
+//}
 
 
 void Layer_Graph::CollisionDetectionForAdditiveManufacturing(nozzle the_nozzle)

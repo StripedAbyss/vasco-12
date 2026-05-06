@@ -17,8 +17,6 @@
 #include "gcode.h"
 #include "polygon.h"
 using namespace std;
-std::vector<std::vector<bool>> is_flatten_area;
-std::vector<pair<int, int>> index_flatten_layer;
 
 bool check_inside(Point pt, Point* pgn_begin, Point* pgn_end, K traits)
 {

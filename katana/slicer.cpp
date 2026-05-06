@@ -19,6 +19,8 @@
 #include "infill.h"
 #include"visual.h"
 
+#include "layer_graph.h"
+
 using namespace std;
 float layer_height;
 

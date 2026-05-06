@@ -12,7 +12,6 @@
 #include <Eigen/Dense>
 #include <tuple>
 #include<iostream>
-#include<igl/writeOBJ.h>
 #include<igl/writeSTL.h>
 #include "helpers.h"
 #include "data.h"
@@ -22,17 +21,9 @@
 #include <vector>
 #include <io.h>
 #include<direct.h> 
-#include<filesystem>
 
 #include <CGAL/Circular_kernel_intersections.h>
 #include <CGAL/Exact_circular_kernel_2.h>
-
-typedef CGAL::Exact_circular_kernel_2             Circular_k;
-typedef CGAL::Point_2<Circular_k>                 Point_2_k;
-typedef CGAL::Circle_2<Circular_k>                Circle_2;
-typedef CGAL::Circular_arc_2<Circular_k>          Circular_arc_2;
-typedef CGAL::Circular_arc_point_2<Circular_k>    Circular_arc_point_2;
-typedef CGAL::CK2_Intersection_traits<Circular_k, Circle_2, Circle_2>::type Intersection_result;
 
 namespace fs = std::filesystem;
 
@@ -40,12 +31,11 @@ namespace fs = std::filesystem;
 #define VASCO_ROOT_DIR "."
 #endif
 
+
+// 工具函数声明
 void get_need_file(string path, vector<string>& file, vector<string>& file_name, string ext);
-
 void change_name(string my_file_path, string suff);
-
 vector<fs::path> collect_files(string dir);
-
 void remove_files(vector<fs::path> files, string dir);
 
 
@@ -100,8 +90,8 @@ int main()
 		std::string path_obj;
 		ifstream file_normal(file_name + ".txt");
 		int num_patches;
-		vector<Eigen::Matrix3d> all_rotMatrix;
 		file_normal >> num_patches;
+		vector<Eigen::Matrix3d> all_rotMatrix;
 
 		Eigen::MatrixXd V;
 		Eigen::MatrixXi F;

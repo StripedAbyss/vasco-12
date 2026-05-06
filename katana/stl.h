@@ -3,8 +3,6 @@
 #define __STL_H__
 
 #include "datastructures.h"
-#include "helpers.h"
-#include "datastructures.h"
 #include "sample_on_ball.h"
 #include <stdio.h>
 #include <assert.h>

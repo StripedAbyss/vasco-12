@@ -17,7 +17,6 @@
 #include "slicer.h"
 #include "katana.h"
 #include "infill.h"
-#include"visual.h"
 
 #include "layer_graph.h"
 
@@ -190,13 +189,13 @@ Segment Slicer::computeSegment(Triangle& t, float z)
         segment.adjoint_mappint_point[0].end = Katana::Instance().mappint_para_point_index[Vertex(*vs[1])];
         segment.adjoint_mappint_point[1].begin = Katana::Instance().mappint_para_point_index[Vertex(*vs[0])];
         segment.adjoint_mappint_point[1].end = Katana::Instance().mappint_para_point_index[Vertex(*vs[2])];
-        double temp_dis = Distance2D(cv::Point2d(segment.vertices[0].x, segment.vertices[0].z), cv::Point2d(Vertex(*vs[0]).x, Vertex(*vs[0]).z));
+        double temp_dis = Distance2D(Eigen::Vector2d(segment.vertices[0].x, segment.vertices[0].z), Eigen::Vector2d(Vertex(*vs[0]).x, Vertex(*vs[0]).z));
         segment.adjoint_mappint_point[0].weight = 1-(temp_dis
-            / (Distance2D(cv::Point2d(segment.vertices[0].x, segment.vertices[0].z), cv::Point2d(Vertex(*vs[1]).x, Vertex(*vs[1]).z))+ temp_dis));
+            / (Distance2D(Eigen::Vector2d(segment.vertices[0].x, segment.vertices[0].z), Eigen::Vector2d(Vertex(*vs[1]).x, Vertex(*vs[1]).z))+ temp_dis));
 
-        temp_dis = Distance2D(cv::Point2d(segment.vertices[1].x, segment.vertices[1].z), cv::Point2d(Vertex(*vs[0]).x, Vertex(*vs[0]).z));
+        temp_dis = Distance2D(Eigen::Vector2d(segment.vertices[1].x, segment.vertices[1].z), Eigen::Vector2d(Vertex(*vs[0]).x, Vertex(*vs[0]).z));
         segment.adjoint_mappint_point[1].weight =1-(temp_dis
-            / (Distance2D(cv::Point2d(segment.vertices[1].x, segment.vertices[1].z), cv::Point2d(Vertex(*vs[2]).x, Vertex(*vs[2]).z)) + temp_dis));
+            / (Distance2D(Eigen::Vector2d(segment.vertices[1].x, segment.vertices[1].z), Eigen::Vector2d(Vertex(*vs[2]).x, Vertex(*vs[2]).z)) + temp_dis));
     }
     else {
         segment.vertices[0] = this->computeIntersection(*vs[1], *vs[2], z);
@@ -206,13 +205,13 @@ Segment Slicer::computeSegment(Triangle& t, float z)
         segment.adjoint_mappint_point[0].end = Katana::Instance().mappint_para_point_index[Vertex(*vs[2])];
         segment.adjoint_mappint_point[1].begin = Katana::Instance().mappint_para_point_index[Vertex(*vs[0])];
         segment.adjoint_mappint_point[1].end = Katana::Instance().mappint_para_point_index[Vertex(*vs[2])];
-        double temp_dis = Distance2D(cv::Point2d(segment.vertices[0].x, segment.vertices[0].z), cv::Point2d(Vertex(*vs[1]).x, Vertex(*vs[1]).z));
+        double temp_dis = Distance2D(Eigen::Vector2d(segment.vertices[0].x, segment.vertices[0].z), Eigen::Vector2d(Vertex(*vs[1]).x, Vertex(*vs[1]).z));
         segment.adjoint_mappint_point[0].weight = 1-(temp_dis
-            / (Distance2D(cv::Point2d(segment.vertices[0].x, segment.vertices[0].z), cv::Point2d(Vertex(*vs[2]).x, Vertex(*vs[2]).z)) + temp_dis));
+            / (Distance2D(Eigen::Vector2d(segment.vertices[0].x, segment.vertices[0].z), Eigen::Vector2d(Vertex(*vs[2]).x, Vertex(*vs[2]).z)) + temp_dis));
 
-        temp_dis = Distance2D(cv::Point2d(segment.vertices[1].x, segment.vertices[1].z), cv::Point2d(Vertex(*vs[0]).x, Vertex(*vs[0]).z));
+        temp_dis = Distance2D(Eigen::Vector2d(segment.vertices[1].x, segment.vertices[1].z), Eigen::Vector2d(Vertex(*vs[0]).x, Vertex(*vs[0]).z));
         segment.adjoint_mappint_point[1].weight = 1-(temp_dis
-            / (Distance2D(cv::Point2d(segment.vertices[1].x, segment.vertices[1].z), cv::Point2d(Vertex(*vs[2]).x, Vertex(*vs[2]).z)) + temp_dis));
+            / (Distance2D(Eigen::Vector2d(segment.vertices[1].x, segment.vertices[1].z), Eigen::Vector2d(Vertex(*vs[2]).x, Vertex(*vs[2]).z)) + temp_dis));
     }
 
     /////////////////////////����������Ƭ��Ϣ//////////////////////////////

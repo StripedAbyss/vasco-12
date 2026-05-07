@@ -185,7 +185,7 @@ public:
 		Slicer_2 current_slicer);
 
 	//void subtractive_accessibility_decomposition(vector<TRiangle> need_detect_triangle, int height_of_beam_search, int cont_number_of_queue, cutter cutting_tool, Slicer_2 current_slicer);
-	void subtractive_accessibility_decomposition_within_2_blocks(int height_of_beam_search, cutter cutting_tool);
+	void subtractive_accessibility_decomposition_global(int height_of_beam_search, cutter cutting_tool);
 	vector<vector<int>> getAccessOri(
 		const Slicer_2& slicer,
 		Slicer_2& slicer_load_patch,

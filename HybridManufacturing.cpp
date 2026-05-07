@@ -2406,7 +2406,7 @@ void HybridManufacturing::subtractive_accessibility_decomposition(
 	////////////////////////////////////////////////////////
 }
 
-void HybridManufacturing::subtractive_accessibility_decomposition_within_2_blocks(int height_of_beam_search, cutter cutting_tool)
+void HybridManufacturing::subtractive_accessibility_decomposition_global(int height_of_beam_search, cutter cutting_tool)
 {
 	sampling_subtractive.OrientationSamplePoints();	//sampling_subtractive生成球面采样点
 	cutting_tool.cylinder_r = 1.5;
@@ -3569,7 +3569,7 @@ void HybridManufacturing::outer_beam_search(nozzle the_nozzle, cutter cutting_to
 
 	cout << "TTYTYTYTYTY";
 
-	//subtractive_accessibility_decomposition_within_2_blocks(height_of_beam_search, cutting_tool);
+	//subtractive_accessibility_decomposition_global(height_of_beam_search, cutting_tool);
 }
 
 void HybridManufacturing::DFS_search(Layer_Graph layer_graph, bool& flag_continue, bool previous_is_continue, vector<bool> judge_S_be_searched, vector<bool> judge_covering_points_be_searched, bool& jud_admit)

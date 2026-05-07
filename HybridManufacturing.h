@@ -216,7 +216,7 @@ public:
 		OrientationScores& pure_value,
 		int id_continue);
 	void sort_candidate_nodes(vector<int>& candidate_nodes, vector<vector<int>> Tree_nodes_for_S);
-	void subtractive_remove_output(const vector<TRiangle>& need_detect_triangle, const Slicer_2& current_slicer, int height_of_beam_search);
+    void subtractive_remove_output(const vector<TRiangle>& need_detect_triangle, const Slicer_2& current_slicer, int height_of_beam_search);
 
 	// --- Visualization switches ---
 	bool open_vis_voronoi;
@@ -224,6 +224,11 @@ public:
 	bool open_vis_green_points;
 	bool open_change_orientation;
 	bool open_vis_stair_case;
+
+private:
+	std::vector<TRiangle> FilterSurfaceRemoveTriangles(
+		const Slicer_2& slicer,
+		const std::vector<TRiangle>& remove_triangles) const;
 
 	/**
 	 * @brief 检测刀具是否与指定的三角形面片发生碰撞

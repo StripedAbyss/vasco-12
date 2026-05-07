@@ -41,6 +41,64 @@ HybridManufacturing::~HybridManufacturing()
 {
 }
 
+std::vector<TRiangle> HybridManufacturing::FilterSurfaceRemoveTriangles(
+	const Slicer_2& slicer,
+	const std::vector<TRiangle>& remove_triangles) const
+{
+	std::vector<TRiangle> surface_triangles;
+	surface_triangles.reserve(remove_triangles.size());
+
+	const size_t face_cnt = Normals.rows();
+	for (size_t i = 0; i < remove_triangles.size(); i++) {
+		Eigen::Vector3d v1, v2, v3;
+		v1.x() = slicer.positions[remove_triangles[i][0]][0];
+		v1.y() = slicer.positions[remove_triangles[i][0]][1];
+		v1.z() = slicer.positions[remove_triangles[i][0]][2];
+		v2.x() = slicer.positions[remove_triangles[i][1]][0];
+		v2.y() = slicer.positions[remove_triangles[i][1]][1];
+		v2.z() = slicer.positions[remove_triangles[i][1]][2];
+		v3.x() = slicer.positions[remove_triangles[i][2]][0];
+		v3.y() = slicer.positions[remove_triangles[i][2]][1];
+		v3.z() = slicer.positions[remove_triangles[i][2]][2];
+		double ans = (v2.x() - v1.x()) * (v2.y() - v3.y()) - (v2.y() - v1.y()) * (v2.x() - v3.x());
+		if (ans > 0) {
+			swap(v2, v3);
+		}
+		double na = (v2.y() - v1.y()) * (v3.z() - v1.z()) - (v2.z() - v1.z()) * (v3.y() - v1.y());
+		double nb = (v2.z() - v1.z()) * (v3.x() - v1.x()) - (v2.x() - v1.x()) * (v3.z() - v1.z());
+		double nc = (v2.x() - v1.x()) * (v3.y() - v1.y()) - (v2.y() - v1.y()) * (v3.x() - v1.x());
+
+		Eigen::Vector3d normal_vector(na, nb, nc);
+		normal_vector.normalize();
+
+		bool jud_surface = false;
+		for (size_t j = 0; j < face_cnt; j++) {
+			double n_dot = normal_vector.dot(Normals.row(j));
+			if (fabs(n_dot) < 0.999) {
+				continue;
+			}
+			Eigen::Vector3d v1_s(v1.x(), v1.y(), v1.z());
+			Eigen::Vector3d v2_s(v2.x(), v2.y(), v2.z());
+			Eigen::Vector3d v3_s(v3.x(), v3.y(), v3.z());
+
+			bool b1 = vasco::core::isPointInTriangle(v1_s, V.row(F(j, 0)), V.row(F(j, 1)), V.row(F(j, 2)));
+			bool b2 = vasco::core::isPointInTriangle(v2_s, V.row(F(j, 0)), V.row(F(j, 1)), V.row(F(j, 2)));
+			bool b3 = vasco::core::isPointInTriangle(v3_s, V.row(F(j, 0)), V.row(F(j, 1)), V.row(F(j, 2)));
+
+			if (b1 && b2 && b3) {
+				jud_surface = true;
+				break;
+			}
+		}
+
+		if (jud_surface) {
+			surface_triangles.push_back(remove_triangles[i]);
+		}
+	}
+
+	return surface_triangles;
+}
+
 void HybridManufacturing::InitializeVoronoi(const std::vector<VoronoiCell>& cells,
 	const std::vector<Eigen::Vector3d>& bottom)
 {
@@ -681,8 +739,8 @@ all_value HybridManufacturing::GainMesh(
 			boundary_right = std::max(boundary_right, all_cut_layers[t][i].x);
 			boundary_left = std::min(boundary_left, all_cut_layers[t][i].x);
 		}
-		cv::Point2d current_triangle_point;
-		cv::Point2d current_layer_point;
+		Eigen::Vector2d current_triangle_point;
+		Eigen::Vector2d current_layer_point;
 		for (; current_index < candidate_triangles.size(); current_index++) {
 			if (abs(min_z_triangle[current_index] - all_cut_layers[t][0].z) > 0.001) {
 				if (min_z_triangle[current_index] > all_cut_layers[t][0].z)
@@ -708,11 +766,11 @@ all_value HybridManufacturing::GainMesh(
 				//}
 				if (jud_is_boundary_point == true) {
 					for (int j = 0; j < all_cut_layers[t].size(); j++) {
-						current_layer_point.x = all_cut_layers[t][j].x;
-						current_layer_point.y = all_cut_layers[t][j].y;
-						current_triangle_point.x = min_z_point[current_index][0];
-						current_triangle_point.y = min_z_point[current_index][1];
-						if (distance2d(current_layer_point, current_triangle_point) < 0.2) {  //4.0
+						current_layer_point.x() = all_cut_layers[t][j].x;
+						current_layer_point.y() = all_cut_layers[t][j].y;
+						current_triangle_point.x() = min_z_point[current_index][0];
+						current_triangle_point.y() = min_z_point[current_index][1];
+						if ((current_layer_point - current_triangle_point).norm() < 0.2) {  //4.0
 							//if (height_of_beam_search != 2)
 							remove_triangles.push_back(candidate_triangles[current_index]);
 							id_of_furcation_of_blocks.push_back(t);
@@ -824,6 +882,7 @@ all_value HybridManufacturing::GainMesh(
 	all_calculated_value.number_of_remaining_face = all_slicer.triangles.size() - remove_triangles.size();
 	all_slicer.triangles = remove_triangles;
 
+
 	all_calculated_value.value_of_projected = calculate_projected_area(all_slicer, all_furcation_of_blocks, all_cut_layers);
 
 	double min_z = 9999999, max_z = -9999999;
@@ -841,6 +900,16 @@ all_value HybridManufacturing::GainMesh(
 	all_calculated_value.value_of_self_support = 1 - sum_not_self_support_area / sum_area;
 	all_calculated_value.large_base = sum_value_of_manufacturing_require / sum_area;
 
+
+	//将slicer旋转回原始位置
+	RotateSlicerPositions(all_slicer, vector_after, vectorBefore);
+
+	auto filtered_patch = FilterSurfaceRemoveTriangles(all_slicer, remove_triangles);
+	if (!all_slicer.positions.empty() && !filtered_patch.empty()) {
+		const std::string mesh_name = "all_slicer_" + std::to_string(height_of_beam_search) + "_" + std::to_string(cont_number_of_queue);
+		polyscope::registerSurfaceMesh(mesh_name, all_slicer.positions, filtered_patch);
+	}
+	//polyscope::show();
 
 	//cout << "()()()(" << double(end_time - start_time) / CLOCKS_PER_SEC << endl;
 	return all_calculated_value;
@@ -1037,15 +1106,11 @@ std::vector<std::vector<int>> HybridManufacturing::EvaluateMergedPatchToolCollis
 
 		std::vector<Eigen::Vector3d> normals(face_count);
 		for (int i = 0; i < face_count; ++i) {
-			cv::Point3d V1(temp_faces[i][0](0, 0), temp_faces[i][0](1, 0), temp_faces[i][0](2, 0));
-			cv::Point3d V2(temp_faces[i][1](0, 0), temp_faces[i][1](1, 0), temp_faces[i][1](2, 0));
-			cv::Point3d V3(temp_faces[i][2](0, 0), temp_faces[i][2](1, 0), temp_faces[i][2](2, 0));
+			const Eigen::Vector3d v1(temp_faces[i][0](0, 0), temp_faces[i][0](1, 0), temp_faces[i][0](2, 0));
+			const Eigen::Vector3d v2(temp_faces[i][1](0, 0), temp_faces[i][1](1, 0), temp_faces[i][1](2, 0));
+			const Eigen::Vector3d v3(temp_faces[i][2](0, 0), temp_faces[i][2](1, 0), temp_faces[i][2](2, 0));
 
-			double na = (V2.y - V1.y) * (V3.z - V1.z) - (V2.z - V1.z) * (V3.y - V1.y);
-			double nb = (V2.z - V1.z) * (V3.x - V1.x) - (V2.x - V1.x) * (V3.z - V1.z);
-			double nc = (V2.x - V1.x) * (V3.y - V1.y) - (V2.y - V1.y) * (V3.x - V1.x);
-
-			Eigen::Vector3d n(na, nb, nc);
+			Eigen::Vector3d n = (v2 - v1).cross(v3 - v1);
 			n.normalize();
 			normals[i] = n;
 		}
@@ -1708,55 +1773,7 @@ void HybridManufacturing::CutMesh(
 
 	size_t face_cnt = Normals.rows();
 	std::cout << "face_cnt " << face_cnt << std::endl;
-	current_remove_triangles.clear();
-	for (size_t i = 0; i < remove_triangles.size(); i++) {
-
-		Eigen::Vector3d v1, v2, v3;
-		v1.x() = slicer.positions[remove_triangles[i][0]][0];
-		v1.y() = slicer.positions[remove_triangles[i][0]][1];
-		v1.z() = slicer.positions[remove_triangles[i][0]][2];
-		v2.x() = slicer.positions[remove_triangles[i][1]][0];
-		v2.y() = slicer.positions[remove_triangles[i][1]][1];
-		v2.z() = slicer.positions[remove_triangles[i][1]][2];
-		v3.x() = slicer.positions[remove_triangles[i][2]][0];
-		v3.y() = slicer.positions[remove_triangles[i][2]][1];
-		v3.z() = slicer.positions[remove_triangles[i][2]][2];
-		double ans = (v2.x() - v1.x()) * (v2.y() - v3.y()) - (v2.y() - v1.y()) * (v2.x() - v3.x());
-		if (ans > 0)	//is clockwise
-			swap(v2, v3);
-		double na = (v2.y() - v1.y()) * (v3.z() - v1.z()) - (v2.z() - v1.z()) * (v3.y() - v1.y());
-		double nb = (v2.z() - v1.z()) * (v3.x() - v1.x()) - (v2.x() - v1.x()) * (v3.z() - v1.z());
-		double nc = (v2.x() - v1.x()) * (v3.y() - v1.y()) - (v2.y() - v1.y()) * (v3.x() - v1.x());
-
-		Eigen::Vector3d normal_vector(na, nb, nc);
-		normal_vector.normalize();
-
-		bool jud_surface = false;
-
-		for (size_t j = 0; j < face_cnt; j++) {
-			double n_dot = normal_vector.dot(Normals.row(j));
-			if (fabs(n_dot) < 0.999) {
-				continue;
-			}
-			Eigen::Vector3d v1_s(v1.x(), v1.y(), v1.z());
-			Eigen::Vector3d v2_s(v2.x(), v2.y(), v2.z());
-			Eigen::Vector3d v3_s(v3.x(), v3.y(), v3.z());
-
-			bool b1 = vasco::core::isPointInTriangle(v1_s, V.row(F(j, 0)), V.row(F(j, 1)), V.row(F(j, 2)));
-			bool b2 = vasco::core::isPointInTriangle(v2_s, V.row(F(j, 0)), V.row(F(j, 1)), V.row(F(j, 2)));
-			bool b3 = vasco::core::isPointInTriangle(v3_s, V.row(F(j, 0)), V.row(F(j, 1)), V.row(F(j, 2)));
-
-			if (b1 && b2 && b3) {
-				jud_surface = true;
-				break;
-			}
-
-		}
-
-		if (jud_surface) {
-			current_remove_triangles.push_back(remove_triangles[i]);
-		}
-	}
+	current_remove_triangles = FilterSurfaceRemoveTriangles(slicer, remove_triangles);
 
 	//add cutting plane triangles
 	/*all_slicer.triangles.insert(all_slicer.triangles.begin(),cutting_plane_points)

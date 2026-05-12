@@ -909,9 +909,20 @@ all_value HybridManufacturing::GainMesh(
 		const std::string mesh_name = "all_slicer_" + std::to_string(height_of_beam_search) + "_" + std::to_string(cont_number_of_queue);
 		polyscope::registerSurfaceMesh(mesh_name, all_slicer.positions, filtered_patch);
 	}
-	//polyscope::show();
 
-	//cout << "()()()(" << double(end_time - start_time) / CLOCKS_PER_SEC << endl;
+	if (height_of_beam_search > 1) {
+		subtractive_remove_output(filtered_patch, all_slicer, height_of_beam_search);
+		cutter cutter1;
+		int sub_patches = subtractive_accessibility_decomposition_local(height_of_beam_search, cutter1);
+		std::cout << "[GainMesh] sub_patches: " << sub_patches <<
+			" cont_number_of_queue " << cont_number_of_queue <<
+			" index_of_pre_node " << index_of_pre_node <<
+			" height_of_beam_search " << height_of_beam_search << endl;
+		all_calculated_value.value_of_sub_patches = 10.0 / sub_patches;
+		//polyscope::show();
+
+		//cout << "()()()(" << double(end_time - start_time) / CLOCKS_PER_SEC << endl;
+	}
 	return all_calculated_value;
 }
 
@@ -1027,7 +1038,8 @@ void HybridManufacturing::VisualizeCutLayers(
 std::vector<std::vector<int>> HybridManufacturing::EvaluateMergedPatchToolCollision(
 	const Slicer_2& merged_patch,
 	const std::vector<int>& merged_face_source_patch_id,
-	cutter cutting_tool) const
+	cutter cutting_tool,
+	bool is_local = false) const
 {
 	const int face_count = static_cast<int>(merged_patch.triangles.size());
 	const int ori_count = static_cast<int>(sampling_subtractive.sample_points.size());
@@ -1061,6 +1073,37 @@ std::vector<std::vector<int>> HybridManufacturing::EvaluateMergedPatchToolCollis
 		}
 		sample_points[i] = p;
 	}
+	// 每个三角面的采样点（内心）
+	Slicer_2 global_slicer;
+	std::vector<vasco::core::Vec3> sample_points_global;
+	int global_face_count;
+	if (is_local) {
+		global_slicer.load(file_name + ".obj");
+		sample_points_global.resize(global_slicer.triangles.size());
+		global_face_count = static_cast<int>(global_slicer.triangles.size());
+		for (int i = 0; i < global_face_count; ++i) {
+			const auto& tri = global_slicer.triangles[i];
+			const auto& v1 = global_slicer.positions[tri[0]];
+			const auto& v2 = global_slicer.positions[tri[1]];
+			const auto& v3 = global_slicer.positions[tri[2]];
+
+			double a = distance3d(v1, v2);
+			double b = distance3d(v1, v3);
+			double c = distance3d(v2, v3);
+
+			vasco::core::Vec3 p{};
+			if (a + b + c == 0.0) {
+				p = v1;
+			}
+			else {
+				for (int k = 0; k < 3; ++k) {
+					p[k] = (a * v1[k] + b * v2[k] + c * v3[k]) / (a + b + c);
+				}
+			}
+			sample_points_global[i] = p;
+		}
+	}
+	
 
 	PrepareToolForCollision(cutting_tool);
 
@@ -1084,6 +1127,27 @@ std::vector<std::vector<int>> HybridManufacturing::EvaluateMergedPatchToolCollis
 			temp_samples[i](2, 0) = sample_points[i][2];
 		}
 
+		std::vector<std::vector<Eigen::MatrixXd>> temp_faces_global(global_face_count, std::vector<Eigen::MatrixXd>(3));
+		std::vector<Eigen::MatrixXd> temp_samples_global(global_face_count);
+	
+		if (is_local) {
+			for (int i = 0; i < global_face_count; ++i) {
+				for (int k = 0; k < 3; ++k) {
+					temp_faces_global[i][k].resize(3, 1);
+					int vid = global_slicer.triangles[i][k];
+					temp_faces_global[i][k](0, 0) = global_slicer.positions[vid][0];
+					temp_faces_global[i][k](1, 0) = global_slicer.positions[vid][1];
+					temp_faces_global[i][k](2, 0) = global_slicer.positions[vid][2];
+				}
+			}
+			for (int i = 0; i < global_face_count; ++i) {
+				temp_samples_global[i].resize(3, 1);
+				temp_samples_global[i](0, 0) = sample_points_global[i][0];
+				temp_samples_global[i](1, 0) = sample_points_global[i][1];
+				temp_samples_global[i](2, 0) = sample_points_global[i][2];
+			}
+		}
+
 		Eigen::Vector3d vectorBefore(0, 0, 1);
 		Eigen::Vector3d vectorAfter(sampling_subtractive.sample_points[ori]);
 		vectorAfter.normalize();
@@ -1097,10 +1161,28 @@ std::vector<std::vector<int>> HybridManufacturing::EvaluateMergedPatchToolCollis
 			temp_samples[i] = rotMatrix.inverse() * temp_samples[i];
 		}
 
+		if(is_local) {
+			for (int i = 0; i < global_face_count; ++i) {
+				for (int k = 0; k < 3; ++k) {
+					temp_faces_global[i][k] = rotMatrix.inverse() * temp_faces_global[i][k];
+				}
+				temp_samples_global[i] = rotMatrix.inverse() * temp_samples_global[i];
+			}
+		}
+
 		std::vector<double> max_z_of_faces(face_count, MIN_D);
 		for (int i = 0; i < face_count; ++i) {
 			for (int k = 0; k < 3; ++k) {
 				max_z_of_faces[i] = std::max(max_z_of_faces[i], temp_faces[i][k](2, 0));
+			}
+		}
+		
+		std::vector<double> max_z_of_faces_global(global_face_count, MIN_D);
+		if (is_local) {
+			for (int i = 0; i < global_face_count; ++i) {
+				for (int k = 0; k < 3; ++k) {
+					max_z_of_faces_global[i] = std::max(max_z_of_faces_global[i], temp_faces_global[i][k](2, 0));
+				}
 			}
 		}
 
@@ -1113,6 +1195,18 @@ std::vector<std::vector<int>> HybridManufacturing::EvaluateMergedPatchToolCollis
 			Eigen::Vector3d n = (v2 - v1).cross(v3 - v1);
 			n.normalize();
 			normals[i] = n;
+		}
+
+		std::vector<Eigen::Vector3d> normals_global(global_face_count);
+		if (is_local) {
+			for (int i = 0; i < global_face_count; ++i) {
+				const Eigen::Vector3d v1(temp_faces_global[i][0](0, 0), temp_faces_global[i][0](1, 0), temp_faces_global[i][0](2, 0));
+				const Eigen::Vector3d v2(temp_faces_global[i][1](0, 0), temp_faces_global[i][1](1, 0), temp_faces_global[i][1](2, 0));
+				const Eigen::Vector3d v3(temp_faces_global[i][2](0, 0), temp_faces_global[i][2](1, 0), temp_faces_global[i][2](2, 0));
+				Eigen::Vector3d n = (v2 - v1).cross(v3 - v1);
+				n.normalize();
+				normals_global[i] = n;
+			}
 		}
 
 		// 计算：刀尖在第 i 面采样点、方向 ori 时，碰撞到的最大 patch_index
@@ -1140,6 +1234,17 @@ std::vector<std::vector<int>> HybridManufacturing::EvaluateMergedPatchToolCollis
 			// 无碰撞记为 -1；有碰撞则赋值为patch index + 1
 			if (!has_collision) {
 				min_collision_patch_matrix[i][ori] = -1;
+				if (is_local) {
+					for (int ii = 0; ii < global_face_count; ++ii) {
+						if (CheckToolCollisionWithCell(center_point, temp_faces_global[ii], max_z_of_faces_global[ii], cutting_tool, 30.0, 3.0)) {
+							has_collision = true;
+							break;
+						}
+					}
+					if (has_collision) {
+						min_collision_patch_matrix[i][ori] = 100;
+					}
+				}
 			}
 			else {
 				min_collision_patch_matrix[i][ori] = max_patch_idx + 1;
@@ -1147,27 +1252,27 @@ std::vector<std::vector<int>> HybridManufacturing::EvaluateMergedPatchToolCollis
 		}
 	}
 
-	std::vector<int> min_collision_patch_per_face(face_count, -1);
-	for (int i = 0; i < face_count; ++i) {
-		int row_min = std::numeric_limits<int>::max();
-		for (int ori = 0; ori < ori_count; ++ori) {
-			row_min = std::min(row_min, min_collision_patch_matrix[i][ori]);
-		}
-		if (row_min == std::numeric_limits<int>::max()) {
-			row_min = -1;
-		}
-		min_collision_patch_per_face[i] = row_min;
-	}
+	//std::vector<int> min_collision_patch_per_face(face_count, -1);
+	//for (int i = 0; i < face_count; ++i) {
+	//	int row_min = std::numeric_limits<int>::max();
+	//	for (int ori = 0; ori < ori_count; ++ori) {
+	//		row_min = std::min(row_min, min_collision_patch_matrix[i][ori]);
+	//	}
+	//	if (row_min == std::numeric_limits<int>::max()) {
+	//		row_min = -1;
+	//	}
+	//	min_collision_patch_per_face[i] = row_min;
+	//}
 
-	// 可选输出
-	std::cout << "[Info] min_collision_patch_per_face size="
-		<< min_collision_patch_per_face.size() << std::endl;
+	//// 可选输出
+	//std::cout << "[Info] min_collision_patch_per_face size="
+	//	<< min_collision_patch_per_face.size() << std::endl;
 
-	// 根据 min_collision_patch_per_face 输出带颜色的 OBJ（每个面一个颜色）
-	ExportMergedPatchFaceColorOBJ(
-		merged_patch,
-		min_collision_patch_per_face,
-		".\\vis\\merged_patch_face_color_by_min_collision_patch.obj");
+	//// 根据 min_collision_patch_per_face 输出带颜色的 OBJ（每个面一个颜色）
+	//ExportMergedPatchFaceColorOBJ(
+	//	merged_patch,
+	//	min_collision_patch_per_face,
+	//	".\\vis\\merged_patch_face_color_by_min_collision_patch.obj");
 
 	return min_collision_patch_matrix;
 }
@@ -2389,7 +2494,7 @@ void HybridManufacturing::subtractive_accessibility_decomposition(
 		std::string mesh_name = "subtractive_patch_" + to_string(height_of_beam_search) + "_" + to_string(t);
 		polyscope::registerSurfaceMesh(mesh_name, vis_positions, vis_triangles[t]);
 	}
-	polyscope::show();
+	//polyscope::show();
 	ofile.close();
 
 
@@ -2787,7 +2892,7 @@ void HybridManufacturing::subtractive_accessibility_decomposition_global(int hei
 						patch_arrow_colors,
 						".\\vis\\merged_patch_graphcut_patch_ori_arrows.obj");
 				}
-				polyscope::show();
+				//polyscope::show();
 
 				std::cout << "[Info] wrote graph-cut colored OBJ: " << gc_obj_file << std::endl;
 				std::cout << "[Info] wrote graph-cut labels txt: .\\vis\\merged_patch_graphcut_label.txt" << std::endl;
@@ -2795,6 +2900,182 @@ void HybridManufacturing::subtractive_accessibility_decomposition_global(int hei
 		}
 	}
 
+}
+
+int HybridManufacturing::subtractive_accessibility_decomposition_local(int height_of_beam_search, cutter cutting_tool)
+{
+	if (sampling_subtractive.sample_points.empty()) {
+		sampling_subtractive.OrientationSamplePoints();	//sampling_subtractive生成球面采样点
+	}
+	cutting_tool.cylinder_r = 1.5;
+	cutting_tool.cylinder_height = 27;
+	cutting_tool.ball_r = 1.5;
+	cutting_tool.carriage_r = 23;
+	cutting_tool.carriage_height = 33;
+
+	/////show all accessible points in every orientation/////
+	Eigen::MatrixXd V_2;
+	Eigen::MatrixXi F_2;
+	igl::readOBJ("ball.obj", V_2, F_2);
+
+	Slicer_2 slicer_load_current_patch;
+
+	Slicer_2 slicer_load_next_patch;
+
+	// 读取并拼接 .\vis\block_patch-1_.obj ~ .\vis\block_patch-height_of_beam_search_.obj
+	std::vector<int> merged_vertex_source_patch_id;
+	std::vector<int> merged_face_source_patch_id;
+
+	Slicer_2 slicer_load_merged_patch = MergeBlockPatchesWithDedup(
+		height_of_beam_search,
+		merged_vertex_source_patch_id,
+		merged_face_source_patch_id,
+		1e-6);
+	slicer_load_merged_patch.save(".\\vis\\block_patch_merged_removedup_local.obj");
+	std::cout << "[Info] merged patch mesh: V=" << slicer_load_merged_patch.positions.size()
+		<< ", F=" << slicer_load_merged_patch.triangles.size() << std::endl;
+
+	// 计算 merged patch 上每个三角面在每个采样方向下的最大碰撞 patch_index
+	const auto merged_face_min_collision_patch = EvaluateMergedPatchToolCollision(
+		slicer_load_merged_patch,
+		merged_face_source_patch_id,
+		cutting_tool,
+		true);
+
+	std::cout << "[Info] merged-face min-collision-patch matrix computed: faces="
+		<< merged_face_min_collision_patch.size() << ", orientations="
+		<< sampling_subtractive.sample_points.size() << std::endl;
+
+	int ret = 999;
+	// ---------------- graph cut on merged patch ----------------
+	{
+		const int face_count = static_cast<int>(slicer_load_merged_patch.triangles.size());
+		const int ori_count = static_cast<int>(sampling_subtractive.sample_points.size());
+		const int block_count = height_of_beam_search;
+		const int num_labels = block_count * ori_count;
+		const int INF_COST = 10000000;
+
+		if (face_count == 0 || ori_count == 0 || block_count <= 0) {
+			std::cout << "[Warn] skip graph cut: invalid sizes. face_count=" << face_count
+				<< ", ori_count=" << ori_count << ", block_count=" << block_count << std::endl;
+		}
+		else {
+			auto encode_label = [ori_count](int patch_id, int ori_id) -> int {
+				// patch_id: 1..block_count, ori_id: 0..ori_count-1
+				return (patch_id - 1) * ori_count + ori_id;
+				};
+
+			auto decode_label = [ori_count](int label_id, int& patch_id, int& ori_id) {
+				patch_id = label_id / ori_count + 1;
+				ori_id = label_id % ori_count;
+				};
+
+			// data cost: face x label
+			std::vector<std::vector<int>> data_value(face_count, std::vector<int>(num_labels, INF_COST));
+
+			int warn_a_lt_b = 0;
+			int warn_no_feasible = 0;
+
+			for (int i = 0; i < face_count; ++i) {
+				int b = 1;
+				if (i < static_cast<int>(merged_face_source_patch_id.size())) {
+					b = merged_face_source_patch_id[i];
+				}
+				else {
+					std::cout << "[what?]i >= static_cast<int>(merged_face_source_patch_id.size())" << std::endl;
+				}
+				b = std::max(1, std::min(block_count, b));
+
+				int feasible_cnt = 0;
+
+				for (int ori = 0; ori < ori_count; ++ori) {
+					int a = merged_face_min_collision_patch[i][ori];
+					if (a == -1) {
+						a = 1;
+					}
+
+					a = std::max(1, std::min(a, block_count));
+
+					// 按 [a..b] 添加标签，若 a>b 不添加并提示
+					if (a > b) {
+						++warn_a_lt_b;
+						continue;
+					}
+
+					for (int p = a; p <= b; ++p) {
+						const int lid = encode_label(p, ori);
+						data_value[i][lid] = 0;
+						++feasible_cnt;
+					}
+				}
+
+				// 防御：若该面没有任何可行label，给一个保底label避免graph cut退化
+				if (feasible_cnt == 0) {
+					++warn_no_feasible;
+					data_value[i][encode_label(b, 30)] = 0;
+				}
+			}
+
+			if (warn_a_lt_b > 0) {
+				std::cout << "[Warn] graph-cut label range invalid (a<b) count = " << warn_a_lt_b << std::endl;
+			}
+			if (warn_no_feasible > 0) {
+				std::cout << "[Warn] faces with no feasible label = " << warn_no_feasible
+					<< " (fallback label assigned)." << std::endl;
+			}
+
+			// 建立面邻接图（共享边）
+			std::vector<std::vector<int>> pixels_relations;
+			std::vector<int> length_edges;
+
+			std::map<std::pair<int, int>, int> edge_owner; // edge -> face id
+			edge_owner.clear();
+
+			for (int i = 0; i < face_count; ++i) {
+				const auto& tri = slicer_load_merged_patch.triangles[i];
+				for (int e = 0; e < 3; ++e) {
+					int u = tri[e];
+					int v = tri[(e + 1) % 3];
+					if (u > v) std::swap(u, v);
+
+					const std::pair<int, int> key(u, v);
+					auto it = edge_owner.find(key);
+					if (it == edge_owner.end()) {
+						edge_owner.insert({ key, i });
+					}
+					else {
+						const int j = it->second;
+						if (j != i) {
+							pixels_relations.push_back({ j, i });
+
+							const auto& p1 = slicer_load_merged_patch.positions[u];
+							const auto& p2 = slicer_load_merged_patch.positions[v];
+							const int w = std::max(1, static_cast<int>(distanceVec3(p1, p2) * 100.0));
+							length_edges.push_back(w);
+						}
+					}
+				}
+			}
+
+			std::cout << "[Info] graph-cut nodes=" << face_count
+				<< ", labels=" << num_labels
+				<< ", edges=" << pixels_relations.size() << std::endl;
+
+			// graph cut
+			std::vector<int> result_labels = GeneralGraph_DArraySArraySpatVarying(
+				face_count,
+				num_labels,
+				data_value,
+				pixels_relations,
+				length_edges);
+
+			auto label_type_count = result_labels;
+			std::sort(label_type_count.begin(), label_type_count.end());
+			ret = std::unique(label_type_count.begin(), label_type_count.end()) - label_type_count.begin();
+
+		}
+	}
+	return ret;
 }
 
 vector<vector<int>> HybridManufacturing::getAccessOri(const Slicer_2& slicer, Slicer_2& slicer_load_patch, vector<vasco::core::Vec3>& all_sample_points_in_triangles, cutter cutting_tool)
@@ -4159,9 +4440,20 @@ void HybridManufacturing::sort_candidate_nodes(vector<int>& candidate_nodes, vec
 	//sort
 	for (int i = 0; i < candidate_nodes.size(); i++) {
 		for (int j = i + 1; j < candidate_nodes.size(); j++) {
-			if ((all_calculated_value[i].value_of_area_S * W_less_area_S + all_calculated_value[i].value_of_more_slice_layers * W_more_slice_layers + all_calculated_value[i].value_of_less_clipping_plane * W_less_clipping_plane + all_calculated_value[i].large_base * W_larger_base + all_calculated_value[i].value_of_covering_points * W_covering_points + all_calculated_value[i].value_of_fragile * W_fragile + all_calculated_value[i].value_of_orientation * W_orientation + all_calculated_value[i].value_of_projected * W_projected)
-				< (all_calculated_value[j].value_of_area_S * W_less_area_S + all_calculated_value[j].value_of_more_slice_layers * W_more_slice_layers + all_calculated_value[j].value_of_less_clipping_plane * W_less_clipping_plane + all_calculated_value[j].large_base * W_larger_base + all_calculated_value[j].value_of_covering_points * W_covering_points + all_calculated_value[j].value_of_fragile * W_fragile + all_calculated_value[j].value_of_orientation * W_orientation + all_calculated_value[j].value_of_projected * W_projected))
-			{
+			auto calc_score = [&](int index) {
+				const auto& value = all_calculated_value[index];
+				return value.value_of_area_S * W_less_area_S
+					+ value.value_of_more_slice_layers * W_more_slice_layers
+					+ value.value_of_less_clipping_plane * W_less_clipping_plane
+					+ value.large_base * W_larger_base
+					+ value.value_of_covering_points * W_covering_points
+					+ value.value_of_fragile * W_fragile
+					+ value.value_of_orientation * W_orientation
+					+ value.value_of_projected * W_projected
+					+ value.value_of_sub_patches * 0.5;
+				};
+
+			if (calc_score(i) < calc_score(j)) {
 				swap(candidate_nodes[i], candidate_nodes[j]);
 				swap(all_calculated_value[i], all_calculated_value[j]);
 				swap(pure_value[i], pure_value[j]);

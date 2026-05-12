@@ -43,6 +43,7 @@ struct all_value
     double number_of_remaining_face;
     double value_of_orientation;
     double value_of_projected;
+    double value_of_sub_patches;
 };
 
 const double MAX_D = 1e18;

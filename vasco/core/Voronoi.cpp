@@ -4,173 +4,183 @@
 
 namespace vasco
 {
-    void BuildVoronoiCells(const Eigen::MatrixXd& V,
-                           const Eigen::MatrixXi& F,
-                           double thresholdZ,
-                           std::vector<VoronoiCell>& outCells,
-                           std::vector<Eigen::Vector3d>& outBottomVertices,
-                           bool visualize,
-                           const std::string& fileNameNoExt)
-    {
-        outCells.clear();
-        outBottomVertices.clear();
+	void BuildVoronoiCells(const Eigen::MatrixXd& V,
+		const Eigen::MatrixXi& F,
+		double thresholdZ,
+		std::vector<VoronoiCell>& outCells,
+		std::vector<Eigen::Vector3d>& outBottomVertices,
+		bool visualize,
+		const std::string& fileNameNoExt)
+	{
+		outCells.clear();
+		outBottomVertices.clear();
 
-        int start_time = clock();
-        std::vector<std::vector<Eigen::Vector3d>> all_lines;
-        double min_z = 1e100;
-        for (int i = 0; i < V.rows(); ++i)
-            min_z = std::min(min_z, V(i, 2));
+		int start_time = clock();
+		std::vector<std::vector<Eigen::Vector3d>> all_lines;
+		double min_z = 1e100;
+		for (int i = 0; i < V.rows(); ++i) {
+			min_z = std::min(min_z, V(i, 2));
+		}
 
-        for (int i = 0; i < V.rows(); ++i)
-        {
-            if (V(i, 2) - min_z > thresholdZ)
-            {
-                VoronoiCell new_cell;
-                std::vector<Eigen::MatrixXd> all_boundary_V;
-                std::vector<int> index_of_adjacent_F;
-                std::vector<int> index_of_adjacent_V;
+		auto collect_adjacent_faces = [&](int vertex_index) {
+			std::vector<int> adjacent_faces;
+			for (int j = 0; j < F.rows(); ++j) {
+				for (int k = 0; k < 3; ++k) {
+					if (F(j, k) == vertex_index) {
+						adjacent_faces.push_back(j);
+					}
+				}
+			}
+			return adjacent_faces;
+			};
 
-                // 邻接面
-                for (int j = 0; j < F.rows(); ++j)
-                    for (int k = 0; k < 3; ++k)
-                        if (F(j, k) == i)
-                            index_of_adjacent_F.push_back(j);
+		for (int i = 0; i < V.rows(); ++i)
+		{
+			if (V(i, 2) - min_z <= thresholdZ)
+			{
+				outBottomVertices.emplace_back(V(i, 0), V(i, 1), V(i, 2));
+				VoronoiCell new_cell;
+				new_cell.is_available = false;
+				outCells.push_back(new_cell);
+				continue;
+			}
 
-                int index_begin = -1, index_end = -1, index_first_begin = -1;
-                for (int j = 0; j < 3; ++j)
-                {
-                    if (F(index_of_adjacent_F[0], j) == i)
-                    {
-                        index_begin = F(index_of_adjacent_F[0], (j + 1) % 3);
-                        index_end   = F(index_of_adjacent_F[0], (j + 2) % 3);
-                        index_first_begin = index_begin;
-                        break;
-                    }
-                }
-                index_of_adjacent_V.push_back(index_begin);
-                int cont_num = 1;
-                while (index_end != index_first_begin)
-                {
-                    for (int j = cont_num; j < (int)index_of_adjacent_F.size(); ++j)
-                    {
-                        for (int k = 0; k < 3; ++k)
-                        {
-                            if (F(index_of_adjacent_F[j], k) == i)
-                            {
-                                if (F(index_of_adjacent_F[j], (k + 1) % 3) == index_end)
-                                {
-                                    index_begin = F(index_of_adjacent_F[j], (k + 1) % 3);
-                                    index_end   = F(index_of_adjacent_F[j], (k + 2) % 3);
-                                    index_of_adjacent_V.push_back(index_begin);
-                                    std::swap(index_of_adjacent_F[j], index_of_adjacent_F[cont_num]);
-                                    ++cont_num;
-                                }
-                                else if (F(index_of_adjacent_F[j], (k + 2) % 3) == index_end)
-                                {
-                                    index_begin = F(index_of_adjacent_F[j], (k + 2) % 3);
-                                    index_end   = F(index_of_adjacent_F[j], (k + 1) % 3);
-                                    index_of_adjacent_V.push_back(index_begin);
-                                    std::swap(index_of_adjacent_F[j], index_of_adjacent_F[cont_num]);
-                                    ++cont_num;
-                                }
-                            }
-                        }
-                    }
-                }
+			VoronoiCell new_cell;
+			std::vector<Eigen::MatrixXd> all_boundary_V;
+			std::vector<int> index_of_adjacent_F = collect_adjacent_faces(i);
+			std::vector<int> index_of_adjacent_V;
 
-                // 计算每个三角面的“Voronoi”顶点（此版本使用三角形质心代替原来的两条垂直平分线交点）
-                for (int j = 0; j < (int)index_of_adjacent_F.size(); ++j)
-                {
-                    double na = (V(F(index_of_adjacent_F[j], 1), 1) - V(F(index_of_adjacent_F[j], 0), 1)) *
-                                (V(F(index_of_adjacent_F[j], 2), 2) - V(F(index_of_adjacent_F[j], 0), 2)) -
-                                (V(F(index_of_adjacent_F[j], 1), 2) - V(F(index_of_adjacent_F[j], 0), 2)) *
-                                (V(F(index_of_adjacent_F[j], 2), 1) - V(F(index_of_adjacent_F[j], 0), 1));
-                    double nb = (V(F(index_of_adjacent_F[j], 1), 2) - V(F(index_of_adjacent_F[j], 0), 2)) *
-                                (V(F(index_of_adjacent_F[j], 2), 0) - V(F(index_of_adjacent_F[j], 0), 0)) -
-                                (V(F(index_of_adjacent_F[j], 1), 0) - V(F(index_of_adjacent_F[j], 0), 0)) *
-                                (V(F(index_of_adjacent_F[j], 2), 2) - V(F(index_of_adjacent_F[j], 0), 2));
-                    double nc = (V(F(index_of_adjacent_F[j], 1), 0) - V(F(index_of_adjacent_F[j], 0), 0)) *
-                                (V(F(index_of_adjacent_F[j], 2), 1) - V(F(index_of_adjacent_F[j], 0), 1)) -
-                                (V(F(index_of_adjacent_F[j], 1), 1) - V(F(index_of_adjacent_F[j], 0), 1)) *
-                                (V(F(index_of_adjacent_F[j], 2), 0) - V(F(index_of_adjacent_F[j], 0), 0));
-                    Eigen::Vector3d vn(na, nb, nc);
+			int index_begin = -1;
+			int index_end = -1;
+			int index_first_begin = -1;
+			for (int j = 0; j < 3; ++j)
+			{
+				if (F(index_of_adjacent_F[0], j) == i)
+				{
+					index_begin = F(index_of_adjacent_F[0], (j + 1) % 3);
+					index_end = F(index_of_adjacent_F[0], (j + 2) % 3);
+					index_first_begin = index_begin;
+					break;
+				}
+			}
+			index_of_adjacent_V.push_back(index_begin);
+			int cont_num = 1;
+			while (index_end != index_first_begin)
+			{
+				for (int j = cont_num; j < static_cast<int>(index_of_adjacent_F.size()); ++j)
+				{
+					for (int k = 0; k < 3; ++k)
+					{
+						if (F(index_of_adjacent_F[j], k) != i)
+						{
+							continue;
+						}
+						if (F(index_of_adjacent_F[j], (k + 1) % 3) == index_end)
+						{
+							index_begin = F(index_of_adjacent_F[j], (k + 1) % 3);
+							index_end = F(index_of_adjacent_F[j], (k + 2) % 3);
+							index_of_adjacent_V.push_back(index_begin);
+							std::swap(index_of_adjacent_F[j], index_of_adjacent_F[cont_num]);
+							++cont_num;
+						}
+						else if (F(index_of_adjacent_F[j], (k + 2) % 3) == index_end)
+						{
+							index_begin = F(index_of_adjacent_F[j], (k + 2) % 3);
+							index_end = F(index_of_adjacent_F[j], (k + 1) % 3);
+							index_of_adjacent_V.push_back(index_begin);
+							std::swap(index_of_adjacent_F[j], index_of_adjacent_F[cont_num]);
+							++cont_num;
+						}
+					}
+				}
+			}
 
-                    Eigen::Vector3d vectorBefore(0, 0, 1);
-                    Eigen::Matrix3d rotMatrix = Eigen::Quaterniond::FromTwoVectors(vectorBefore, vn).toRotationMatrix();
+			// 计算每个三角面的“Voronoi”顶点（此版本使用三角形质心代替原来的两条垂直平分线交点）
+			for (int j = 0; j < (int)index_of_adjacent_F.size(); ++j)
+			{
+				double na = (V(F(index_of_adjacent_F[j], 1), 1) - V(F(index_of_adjacent_F[j], 0), 1)) *
+					(V(F(index_of_adjacent_F[j], 2), 2) - V(F(index_of_adjacent_F[j], 0), 2)) -
+					(V(F(index_of_adjacent_F[j], 1), 2) - V(F(index_of_adjacent_F[j], 0), 2)) *
+					(V(F(index_of_adjacent_F[j], 2), 1) - V(F(index_of_adjacent_F[j], 0), 1));
+				double nb = (V(F(index_of_adjacent_F[j], 1), 2) - V(F(index_of_adjacent_F[j], 0), 2)) *
+					(V(F(index_of_adjacent_F[j], 2), 0) - V(F(index_of_adjacent_F[j], 0), 0)) -
+					(V(F(index_of_adjacent_F[j], 1), 0) - V(F(index_of_adjacent_F[j], 0), 0)) *
+					(V(F(index_of_adjacent_F[j], 2), 2) - V(F(index_of_adjacent_F[j], 0), 2));
+				double nc = (V(F(index_of_adjacent_F[j], 1), 0) - V(F(index_of_adjacent_F[j], 0), 0)) *
+					(V(F(index_of_adjacent_F[j], 2), 1) - V(F(index_of_adjacent_F[j], 0), 1)) -
+					(V(F(index_of_adjacent_F[j], 1), 1) - V(F(index_of_adjacent_F[j], 0), 1)) *
+					(V(F(index_of_adjacent_F[j], 2), 0) - V(F(index_of_adjacent_F[j], 0), 0));
+				Eigen::Vector3d vn(na, nb, nc);
 
-                    std::vector<Eigen::MatrixXd> current_V;
-                    current_V.reserve(3);
-                    Eigen::MatrixXd temp_V(3, 1);
+				Eigen::Vector3d vectorBefore(0, 0, 1);
+				Eigen::Matrix3d rotMatrix = Eigen::Quaterniond::FromTwoVectors(vectorBefore, vn).toRotationMatrix();
 
-                    temp_V << V(i, 0), V(i, 1), V(i, 2);
-                    current_V.push_back(temp_V);
-                    temp_V << V(index_of_adjacent_V[j], 0), V(index_of_adjacent_V[j], 1), V(index_of_adjacent_V[j], 2);
-                    current_V.push_back(temp_V);
-                    temp_V << V(index_of_adjacent_V[(j + 1) % index_of_adjacent_V.size()], 0),
-                               V(index_of_adjacent_V[(j + 1) % index_of_adjacent_V.size()], 1),
-                               V(index_of_adjacent_V[(j + 1) % index_of_adjacent_V.size()], 2);
-                    current_V.push_back(temp_V);
+				std::vector<Eigen::MatrixXd> current_V;
+				current_V.reserve(3);
+				Eigen::MatrixXd temp_V(3, 1);
 
-                    for (auto& mv : current_V)
-                        mv = rotMatrix.inverse() * mv;
+				temp_V << V(i, 0), V(i, 1), V(i, 2);
+				current_V.push_back(temp_V);
+				temp_V << V(index_of_adjacent_V[j], 0), V(index_of_adjacent_V[j], 1), V(index_of_adjacent_V[j], 2);
+				current_V.push_back(temp_V);
+				temp_V << V(index_of_adjacent_V[(j + 1) % index_of_adjacent_V.size()], 0),
+					V(index_of_adjacent_V[(j + 1) % index_of_adjacent_V.size()], 1),
+					V(index_of_adjacent_V[(j + 1) % index_of_adjacent_V.size()], 2);
+				current_V.push_back(temp_V);
 
-                    // 使用质心
-                    Eigen::MatrixXd new_V(3, 1);
-                    new_V(0, 0) = (current_V[0](0, 0) + current_V[1](0, 0) + current_V[2](0, 0)) / 3.0;
-                    new_V(1, 0) = (current_V[0](1, 0) + current_V[1](1, 0) + current_V[2](1, 0)) / 3.0;
-                    new_V(2, 0) = current_V[0](2, 0);
+				for (auto& mv : current_V)
+					mv = rotMatrix.inverse() * mv;
 
-                    rotMatrix = Eigen::Quaterniond::FromTwoVectors(vn, vectorBefore).toRotationMatrix();
-                    new_V = rotMatrix.inverse() * new_V;
+				// 使用质心
+				Eigen::MatrixXd new_V(3, 1);
+				new_V(0, 0) = (current_V[0](0, 0) + current_V[1](0, 0) + current_V[2](0, 0)) / 3.0;
+				new_V(1, 0) = (current_V[0](1, 0) + current_V[1](1, 0) + current_V[2](1, 0)) / 3.0;
+				new_V(2, 0) = current_V[0](2, 0);
 
-                    all_boundary_V.push_back(new_V);
+				rotMatrix = Eigen::Quaterniond::FromTwoVectors(vn, vectorBefore).toRotationMatrix();
+				new_V = rotMatrix.inverse() * new_V;
 
-                    if (all_boundary_V.size() == 2)
-                    {
-                        Eigen::Vector3d v1(V(i, 0), V(i, 1), V(i, 2));
-                        Eigen::Vector3d v2(all_boundary_V[0](0, 0), all_boundary_V[0](1, 0), all_boundary_V[0](2, 0));
-                        Eigen::Vector3d v3(all_boundary_V[1](0, 0), all_boundary_V[1](1, 0), all_boundary_V[1](2, 0));
-                        double na2 = (v2.y() - v1.y()) * (v3.z() - v1.z()) - (v2.z() - v1.z()) * (v3.y() - v1.y());
-                        double nb2 = (v2.z() - v1.z()) * (v3.x() - v1.x()) - (v2.x() - v1.x()) * (v3.z() - v1.z());
-                        double nc2 = (v2.x() - v1.x()) * (v3.y() - v1.y()) - (v2.y() - v1.y()) * (v3.x() - v1.x());
-                        Eigen::Vector3d vn2(na2, nb2, nc2);
-                        if (vn.dot(vn2) < 0)
-                            std::swap(all_boundary_V[0], all_boundary_V[1]);
-                    }
-                }
+				all_boundary_V.push_back(new_V);
 
-                new_cell.is_available = true;
-                new_cell.site = i;
-                new_cell.adjacent_cells = index_of_adjacent_V;
+				if (all_boundary_V.size() == 2)
+				{
+					Eigen::Vector3d v1(V(i, 0), V(i, 1), V(i, 2));
+					Eigen::Vector3d v2(all_boundary_V[0](0, 0), all_boundary_V[0](1, 0), all_boundary_V[0](2, 0));
+					Eigen::Vector3d v3(all_boundary_V[1](0, 0), all_boundary_V[1](1, 0), all_boundary_V[1](2, 0));
+					double na2 = (v2.y() - v1.y()) * (v3.z() - v1.z()) - (v2.z() - v1.z()) * (v3.y() - v1.y());
+					double nb2 = (v2.z() - v1.z()) * (v3.x() - v1.x()) - (v2.x() - v1.x()) * (v3.z() - v1.z());
+					double nc2 = (v2.x() - v1.x()) * (v3.y() - v1.y()) - (v2.y() - v1.y()) * (v3.x() - v1.x());
+					Eigen::Vector3d vn2(na2, nb2, nc2);
+					if (vn.dot(vn2) < 0)
+						std::swap(all_boundary_V[0], all_boundary_V[1]);
+				}
+			}
 
-                std::vector<Eigen::Vector3d> temp_lines;
-                all_lines.push_back(temp_lines);
-                for (const auto& bV : all_boundary_V)
-                {
-                    Eigen::Vector3d temp_vec(bV(0, 0), bV(1, 0), bV(2, 0));
-                    all_lines.back().push_back(temp_vec);
-                    new_cell.all_points_in_polygon.emplace_back(temp_vec.x(), temp_vec.y(), temp_vec.z());
-                }
-                outCells.push_back(std::move(new_cell));
-            }
-            else
-            {
-                outBottomVertices.emplace_back(V(i, 0), V(i, 1), V(i, 2));
-                VoronoiCell new_cell;
-                new_cell.is_available = false;
-                outCells.push_back(new_cell);
-            }
-        }
 
-        int end_time = clock();
-        std::cout << "&&&time&&& Voronoi build: " << double(end_time - start_time) / CLOCKS_PER_SEC << std::endl;
+			new_cell.is_available = true;
+			new_cell.site = i;
+			new_cell.adjacent_cells = index_of_adjacent_V;
 
-        if (visualize)
-        {
-            Visual vis;
-            vis.generateModelForRendering_8(all_lines, fileNameNoExt + "_voronoi.obj");
-        }
-    }
+			std::vector<Eigen::Vector3d> temp_lines;
+			all_lines.push_back(temp_lines);
+			for (const auto& bV : all_boundary_V)
+			{
+				Eigen::Vector3d temp_vec(bV(0, 0), bV(1, 0), bV(2, 0));
+				all_lines.back().push_back(temp_vec);
+				new_cell.all_points_in_polygon.emplace_back(temp_vec.x(), temp_vec.y(), temp_vec.z());
+			}
+			outCells.push_back(std::move(new_cell));
+		}
+
+		int end_time = clock();
+		std::cout << "&&&time&&& Voronoi build: " << double(end_time - start_time) / CLOCKS_PER_SEC << std::endl;
+
+		if (visualize)
+		{
+			Visual vis;
+			vis.generateModelForRendering_8(all_lines, fileNameNoExt + "_voronoi.obj");
+		}
+	}
 }
 
 

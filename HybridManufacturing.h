@@ -186,11 +186,15 @@ public:
 
 	//void subtractive_accessibility_decomposition(vector<TRiangle> need_detect_triangle, int height_of_beam_search, int cont_number_of_queue, cutter cutting_tool, Slicer_2 current_slicer);
 	void subtractive_accessibility_decomposition_global(int height_of_beam_search, cutter cutting_tool);
+	int subtractive_accessibility_decomposition_local(int height_of_beam_search, cutter cutting_tool);
+
 	vector<vector<int>> getAccessOri(
 		const Slicer_2& slicer,
 		Slicer_2& slicer_load_patch,
 		vector<vasco::core::Vec3>& all_sample_points_in_triangles,
 		cutter cutting_tool);
+
+
 	void outer_beam_search(nozzle the_nozzle, cutter cutting_tool);
 
 	// --- Graph search ---
@@ -317,7 +321,8 @@ private:
 	std::vector<std::vector<int>> EvaluateMergedPatchToolCollision(
 		const Slicer_2& merged_patch,
 		const std::vector<int>& merged_face_source_patch_id,
-		cutter cutting_tool) const;
+		cutter cutting_tool,
+		bool is_local) const;
 
 	Slicer_2 MergeBlockPatchesWithDedup(
 		int max_patch_index,

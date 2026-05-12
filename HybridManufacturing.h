@@ -35,6 +35,7 @@
 #include <time.h>
 
 #include <CGAL/Exact_predicates_inexact_constructions_kernel.h>
+#include <CGAL/Surface_mesh.h>
 #include <CGAL/convex_hull_2.h>
 #include <CGAL/Convex_hull_traits_adapter_2.h>
 #include <CGAL/property_map.h>
@@ -66,6 +67,10 @@
 #include "polyscope/surface_mesh.h"
 
 using namespace std;
+
+using Kernel = CGAL::Exact_predicates_inexact_constructions_kernel;
+using Point_3 = Kernel::Point_3;
+using SurfaceMesh = CGAL::Surface_mesh<Point_3>;
 
 #include "vasco/core/Constants.h"
 #include "vasco/core/Types.h"
@@ -220,7 +225,7 @@ public:
 		OrientationScores& pure_value,
 		int id_continue);
 	void sort_candidate_nodes(vector<int>& candidate_nodes, vector<vector<int>> Tree_nodes_for_S);
-    void subtractive_remove_output(const vector<TRiangle>& need_detect_triangle, const Slicer_2& current_slicer, int height_of_beam_search);
+	void subtractive_remove_output(const vector<TRiangle>& need_detect_triangle, const Slicer_2& current_slicer, int height_of_beam_search);
 
 	// --- Visualization switches ---
 	bool open_vis_voronoi;
@@ -230,6 +235,8 @@ public:
 	bool open_vis_stair_case;
 
 private:
+	void InitializeSurfaceMeshFromVF();
+
 	std::vector<TRiangle> FilterSurfaceRemoveTriangles(
 		const Slicer_2& slicer,
 		const std::vector<TRiangle>& remove_triangles) const;
@@ -287,6 +294,7 @@ private:
 	Eigen::MatrixXd V;
 	std::vector<Eigen::MatrixXd> V_2;
 	Eigen::MatrixXi F;
+	SurfaceMesh input_mesh;
 	Eigen::MatrixXd Normals;
 	std::vector<Eigen::Vector3d> V_bottom;              // 仍使用
 	std::vector<VoronoiCell> all_voronoi_cells; // 类型改为命名空间版本

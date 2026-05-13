@@ -250,7 +250,7 @@ private:
 	 */
 	bool CheckToolCollisionWithCell(
 		const Eigen::Vector3d& center_point,
-		const std::vector<Eigen::MatrixXd>& target_cell_vertices,
+		const std::vector<Eigen::Vector3d>& target_cell_vertices,
 		double max_z_target,
 		const cutter& nozzle,
 		double z_threshold_divisor = 1.0,

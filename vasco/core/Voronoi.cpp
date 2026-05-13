@@ -250,15 +250,18 @@ namespace vasco
 				continue;
 			}
 
-			std::vector<int> index_of_adjacent_V;
+
+			VoronoiCell new_cell;
+			std::vector<Eigen::Vector3d> &all_boundary_V = new_cell.all_points_in_polygon;
+			all_boundary_V.reserve(around_halfedges.size());
+
+			std::vector<int> &index_of_adjacent_V = new_cell.adjacent_cells;
 			index_of_adjacent_V.reserve(around_halfedges.size());
 			for (const auto h : around_halfedges) {
 				index_of_adjacent_V.push_back(static_cast<int>(mesh.source(h).idx()));
 			}
-
-			VoronoiCell new_cell;
-			std::vector<Eigen::MatrixXd> all_boundary_V;
-			all_boundary_V.reserve(around_halfedges.size());
+			new_cell.is_available = true;
+			new_cell.site = static_cast<int>(vi.idx());
 
 			for (int j = 0; j < static_cast<int>(around_halfedges.size()); ++j)
 			{
@@ -272,27 +275,12 @@ namespace vasco
 				const auto centroid = CGAL::centroid(p1, p0, p2);
 				Eigen::Vector3d centroid_vec(centroid.x(), centroid.y(), centroid.z());
 
-				Eigen::MatrixXd new_V(3, 1);
-				new_V(0, 0) = centroid_vec.x();
-				new_V(1, 0) = centroid_vec.y();
-				new_V(2, 0) = centroid_vec.z();
-
-				all_boundary_V.push_back(new_V);
+				all_boundary_V.push_back(centroid_vec);
 
 			}
 
-			new_cell.is_available = true;
-			new_cell.site = static_cast<int>(vi.idx());
-			new_cell.adjacent_cells = index_of_adjacent_V;
 
-			std::vector<Eigen::Vector3d> temp_lines;
-			all_lines.push_back(temp_lines);
-			for (const auto& bV : all_boundary_V)
-			{
-				Eigen::Vector3d temp_vec(bV(0, 0), bV(1, 0), bV(2, 0));
-				all_lines.back().push_back(temp_vec);
-				new_cell.all_points_in_polygon.emplace_back(temp_vec.x(), temp_vec.y(), temp_vec.z());
-			}
+			all_lines.push_back(all_boundary_V);
 			outCells.push_back(std::move(new_cell));
 		}
 

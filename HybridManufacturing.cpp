@@ -170,20 +170,18 @@ int HybridManufacturing::CollisionDetectionForSubtractiveManufacturing(cutter th
 	for (int ori = 0; ori < sampling_subtractive.sample_points.size(); ori++) {	//枚举所有采样方向
 
 		///////////////////rotate/////////////////////
-		std::vector<Eigen::MatrixXd> temp_V;
+		std::vector<Eigen::Vector3d> temp_V;
 		temp_V.resize(V.rows());	//temp_V存储旋转后的模型顶点
 		for (int i = 0; i < V.rows(); i++) {
-			temp_V[i].resize(3, 1);
 			temp_V[i](0, 0) = V.row(i).x();
 			temp_V[i](1, 0) = V.row(i).y();
 			temp_V[i](2, 0) = V.row(i).z();
 		}
-		vector<std::vector<Eigen::MatrixXd>> temp_new_V;	//temp_new_V存储旋转后的voronoi面边界顶点
+		vector<std::vector<Eigen::Vector3d>> temp_new_V;	//temp_new_V存储旋转后的voronoi面边界顶点
 		temp_new_V.resize(V.rows());
 		for (int i = 0; i < V.rows(); i++) {
 			temp_new_V[i].resize(all_voronoi_cells[i].all_points_in_polygon.size());
 			for (int k = 0; k < temp_new_V[i].size(); k++) {
-				temp_new_V[i][k].resize(3, 1);
 				temp_new_V[i][k](0, 0) = all_voronoi_cells[i].all_points_in_polygon[k].x();
 				temp_new_V[i][k](1, 0) = all_voronoi_cells[i].all_points_in_polygon[k].y();
 				temp_new_V[i][k](2, 0) = all_voronoi_cells[i].all_points_in_polygon[k].z();
@@ -308,23 +306,21 @@ int HybridManufacturing::CollisionDetectionForSubtractiveManufacturing(cutter th
 	int cont_number_2 = 0;
 	std::vector<Eigen::MatrixXd> vis_red_points;	//vis_red_points存储不可达voronoi单元的边界顶点坐标，用于可视化
 	std::vector<Eigen::MatrixXd> vis_green_points;	//vis_green_points存储可达voronoi单元的边界顶点坐标，用于可视化
-	std::vector<Eigen::MatrixXd> temp_V_vis;	//temp_V_vis存储未旋转的模型顶点坐标，用于可视化
+	std::vector<Eigen::Vector3d> temp_V_vis;	//temp_V_vis存储未旋转的模型顶点坐标，用于可视化
 	for (int ori = 0; ori < sampling_subtractive.sample_points.size(); ori++) {	//ori枚举所有采样方向
-		std::vector<Eigen::MatrixXd> temp_V;	//temp_V存储旋转后的模型顶点坐标
+		std::vector<Eigen::Vector3d> temp_V;	//temp_V存储旋转后的模型顶点坐标
 		temp_V.resize(V.rows());
 		temp_V_vis.resize(V.rows());	//temp_V_vis存储未旋转的模型顶点坐标
 		for (int i = 0; i < V.rows(); i++) {
-			temp_V[i].resize(3, 1);
 			temp_V[i](0, 0) = V.row(i).x();
 			temp_V[i](1, 0) = V.row(i).y();
 			temp_V[i](2, 0) = V.row(i).z();
 		}
-		vector<std::vector<Eigen::MatrixXd>> temp_new_V;	//temp_new_V存储旋转后的voronoi面边界顶点坐标
+		vector<std::vector<Eigen::Vector3d>> temp_new_V;	//temp_new_V存储旋转后的voronoi面边界顶点坐标
 		temp_new_V.resize(V.rows());
 		for (int i = 0; i < V.rows(); i++) {
 			temp_new_V[i].resize(all_voronoi_cells[i].all_points_in_polygon.size());
 			for (int k = 0; k < temp_new_V[i].size(); k++) {
-				temp_new_V[i][k].resize(3, 1);
 				temp_new_V[i][k](0, 0) = all_voronoi_cells[i].all_points_in_polygon[k].x();
 				temp_new_V[i][k](1, 0) = all_voronoi_cells[i].all_points_in_polygon[k].y();
 				temp_new_V[i][k](2, 0) = all_voronoi_cells[i].all_points_in_polygon[k].z();
@@ -525,10 +521,9 @@ void HybridManufacturing::GetALLFragileVertex(SAMPLE_ON_BALL sampling)
 {
 	for (int ori = 0; ori < sampling.sample_points.size(); ori++) {
 		//rotating the blocks and then slicing//
-		vector<Eigen::MatrixXd> temp_V;
+		vector<Eigen::Vector3d> temp_V;
 		temp_V.resize(V.rows());
 		for (int i = 0; i < V.rows(); i++) {
-			temp_V[i].resize(3, 1);
 			temp_V[i](0, 0) = V.row(i).x();
 			temp_V[i](1, 0) = V.row(i).y();
 			temp_V[i](2, 0) = V.row(i).z();
@@ -597,12 +592,11 @@ void HybridManufacturing::detect_collision_with_printing_platform(
 		//return;
 	Eigen::Vector3d vectorBefore(0, 0, 1);
 	Eigen::Matrix3d rotMatrix = Eigen::Quaterniond::FromTwoVectors(ori_now, vectorBefore).toRotationMatrix();
-	vector<vector<Eigen::MatrixXd>> rotate_all_cut_layers;
+	vector<vector<Eigen::Vector3d>> rotate_all_cut_layers;
 	rotate_all_cut_layers.resize(all_cut_layers.size());
 	for (int i = 0; i < all_cut_layers.size(); i++) {
 		rotate_all_cut_layers[i].resize(all_cut_layers[i].size());
 		for (int j = 0; j < all_cut_layers[i].size(); j++) {
-			rotate_all_cut_layers[i][j].resize(3, 1);
 			rotate_all_cut_layers[i][j](0, 0) = all_cut_layers[i][j].x;
 			rotate_all_cut_layers[i][j](1, 0) = all_cut_layers[i][j].y;
 			rotate_all_cut_layers[i][j](2, 0) = all_cut_layers[i][j].z;
@@ -674,8 +668,7 @@ all_value HybridManufacturing::GainMesh(
 	Eigen::Vector3d vectorBefore(0, 0, 1);
 	Eigen::Matrix3d rotMatrix = Eigen::Quaterniond::FromTwoVectors(vectorBefore, vector_after).toRotationMatrix();
 	for (int i = 0; i < slicer.positions.size(); i++) {
-		Eigen::MatrixXd temp_V;
-		temp_V.resize(3, 1);
+		Eigen::Vector3d temp_V;
 		temp_V(0, 0) = slicer.positions[i][0];
 		temp_V(1, 0) = slicer.positions[i][1];
 		temp_V(2, 0) = slicer.positions[i][2];
@@ -1135,10 +1128,9 @@ std::vector<std::vector<int>> HybridManufacturing::EvaluateMergedPatchToolCollis
 	PrepareToolForCollision(cutting_tool);
 
 	for (int ori = 0; ori < ori_count; ++ori) {
-		std::vector<std::vector<Eigen::MatrixXd>> temp_faces(face_count, std::vector<Eigen::MatrixXd>(3));
+		std::vector<std::vector<Eigen::Vector3d>> temp_faces(face_count, std::vector<Eigen::Vector3d>(3));
 		for (int i = 0; i < face_count; ++i) {
 			for (int k = 0; k < 3; ++k) {
-				temp_faces[i][k].resize(3, 1);
 				int vid = merged_patch.triangles[i][k];
 				temp_faces[i][k](0, 0) = merged_patch.positions[vid][0];
 				temp_faces[i][k](1, 0) = merged_patch.positions[vid][1];
@@ -1146,21 +1138,19 @@ std::vector<std::vector<int>> HybridManufacturing::EvaluateMergedPatchToolCollis
 			}
 		}
 
-		std::vector<Eigen::MatrixXd> temp_samples(face_count);
+		std::vector<Eigen::Vector3d> temp_samples(face_count);
 		for (int i = 0; i < face_count; ++i) {
-			temp_samples[i].resize(3, 1);
 			temp_samples[i](0, 0) = sample_points[i][0];
 			temp_samples[i](1, 0) = sample_points[i][1];
 			temp_samples[i](2, 0) = sample_points[i][2];
 		}
 
-		std::vector<std::vector<Eigen::MatrixXd>> temp_faces_global(global_face_count, std::vector<Eigen::MatrixXd>(3));
-		std::vector<Eigen::MatrixXd> temp_samples_global(global_face_count);
+		std::vector<std::vector<Eigen::Vector3d>> temp_faces_global(global_face_count, std::vector<Eigen::Vector3d>(3));
+		std::vector<Eigen::Vector3d> temp_samples_global(global_face_count);
 
 		if (is_local) {
 			for (int i = 0; i < global_face_count; ++i) {
 				for (int k = 0; k < 3; ++k) {
-					temp_faces_global[i][k].resize(3, 1);
 					int vid = global_slicer.triangles[i][k];
 					temp_faces_global[i][k](0, 0) = global_slicer.positions[vid][0];
 					temp_faces_global[i][k](1, 0) = global_slicer.positions[vid][1];
@@ -1168,7 +1158,6 @@ std::vector<std::vector<int>> HybridManufacturing::EvaluateMergedPatchToolCollis
 				}
 			}
 			for (int i = 0; i < global_face_count; ++i) {
-				temp_samples_global[i].resize(3, 1);
 				temp_samples_global[i](0, 0) = sample_points_global[i][0];
 				temp_samples_global[i](1, 0) = sample_points_global[i][1];
 				temp_samples_global[i](2, 0) = sample_points_global[i][2];
@@ -2237,30 +2226,27 @@ void HybridManufacturing::subtractive_accessibility_decomposition(
 		//先去除水平面以下的方向  //注意只有最底下的block需要限制!!!!!!!!!!!!!!
 		/*if (sampling_subtractive.sample_points[ori].z < 0.2)
 			continue;*/
-		vector<std::vector<Eigen::MatrixXd>> temp_new_V_remain(slicer.triangles.size());
+		vector<std::vector<Eigen::Vector3d>> temp_new_V_remain(slicer.triangles.size());
 		for (int i = 0; i < slicer.triangles.size(); i++) {
 			temp_new_V_remain[i].resize(3);
 			for (int k = 0; k < 3; k++) {
-				temp_new_V_remain[i][k].resize(3, 1);
 				temp_new_V_remain[i][k](0, 0) = slicer.positions[slicer.triangles[i][k]][0];
 				temp_new_V_remain[i][k](1, 0) = slicer.positions[slicer.triangles[i][k]][1];
 				temp_new_V_remain[i][k](2, 0) = slicer.positions[slicer.triangles[i][k]][2];
 			}
 		}
 
-		std::vector<Eigen::MatrixXd> temp_V_need_detect(need_detect_triangle.size());
+		std::vector<Eigen::Vector3d> temp_V_need_detect(need_detect_triangle.size());
 		for (int i = 0; i < need_detect_triangle.size(); i++) {
-			temp_V_need_detect[i].resize(3, 1);
 			temp_V_need_detect[i](0, 0) = all_sample_points_in_triangles[i].x;
 			temp_V_need_detect[i](1, 0) = all_sample_points_in_triangles[i].y;
 			temp_V_need_detect[i](2, 0) = all_sample_points_in_triangles[i].z;
 		}
 
-		vector<std::vector<Eigen::MatrixXd>> temp_V_need_detect_triangle(need_detect_triangle.size());
+		vector<std::vector<Eigen::Vector3d>> temp_V_need_detect_triangle(need_detect_triangle.size());
 		for (int i = 0; i < need_detect_triangle.size(); i++) {
 			temp_V_need_detect_triangle[i].resize(3);
 			for (int k = 0; k < 3; k++) {
-				temp_V_need_detect_triangle[i][k].resize(3, 1);
 				temp_V_need_detect_triangle[i][k](0, 0) = slicer.positions[need_detect_triangle[i][k]][0];
 				temp_V_need_detect_triangle[i][k](1, 0) = slicer.positions[need_detect_triangle[i][k]][1];
 				temp_V_need_detect_triangle[i][k](2, 0) = slicer.positions[need_detect_triangle[i][k]][2];
@@ -2521,7 +2507,7 @@ void HybridManufacturing::subtractive_accessibility_decomposition(
 		std::string mesh_name = "subtractive_patch_" + to_string(height_of_beam_search) + "_" + to_string(t);
 		polyscope::registerSurfaceMesh(mesh_name, vis_positions, vis_triangles[t]);
 	}
-	//polyscope::show();
+	polyscope::show();
 	ofile.close();
 
 
@@ -3111,30 +3097,27 @@ vector<vector<int>> HybridManufacturing::getAccessOri(const Slicer_2& slicer, Sl
 	vector<vector<int>> accessible_ori_of_need_detect_V(need_detect_triangle.size(), vector<int>(sampling_subtractive.sample_points.size(), 10000000));
 	cout << "%sampling_subtractive.sample_points.size() " << sampling_subtractive.sample_points.size() << endl;
 	for (int ori = 0; ori < sampling_subtractive.sample_points.size(); ori++) {
-		vector<std::vector<Eigen::MatrixXd>> temp_new_V_remain(slicer.triangles.size());
+		vector<std::vector<Eigen::Vector3d>> temp_new_V_remain(slicer.triangles.size());
 		for (int i = 0; i < slicer.triangles.size(); i++) {
 			temp_new_V_remain[i].resize(3);
 			for (int k = 0; k < 3; k++) {
-				temp_new_V_remain[i][k].resize(3, 1);
 				temp_new_V_remain[i][k](0, 0) = slicer.positions[slicer.triangles[i][k]][0];
 				temp_new_V_remain[i][k](1, 0) = slicer.positions[slicer.triangles[i][k]][1];
 				temp_new_V_remain[i][k](2, 0) = slicer.positions[slicer.triangles[i][k]][2];
 			}
 		}
 
-		std::vector<Eigen::MatrixXd> temp_V_need_detect(need_detect_triangle.size());
+		std::vector<Eigen::Vector3d> temp_V_need_detect(need_detect_triangle.size());
 		for (int i = 0; i < need_detect_triangle.size(); i++) {
-			temp_V_need_detect[i].resize(3, 1);
 			temp_V_need_detect[i](0, 0) = all_sample_points_in_triangles[i][0];
 			temp_V_need_detect[i](1, 0) = all_sample_points_in_triangles[i][1];
 			temp_V_need_detect[i](2, 0) = all_sample_points_in_triangles[i][2];
 		}
 
-		vector<std::vector<Eigen::MatrixXd>> temp_V_need_detect_triangle(need_detect_triangle.size());
+		vector<std::vector<Eigen::Vector3d>> temp_V_need_detect_triangle(need_detect_triangle.size());
 		for (int i = 0; i < need_detect_triangle.size(); i++) {
 			temp_V_need_detect_triangle[i].resize(3);
 			for (int k = 0; k < 3; k++) {
-				temp_V_need_detect_triangle[i][k].resize(3, 1);
 				temp_V_need_detect_triangle[i][k](0, 0) = slicer_load_patch.positions[need_detect_triangle[i][k]][0];
 				temp_V_need_detect_triangle[i][k](1, 0) = slicer_load_patch.positions[need_detect_triangle[i][k]][1];
 				temp_V_need_detect_triangle[i][k](2, 0) = slicer_load_patch.positions[need_detect_triangle[i][k]][2];
@@ -4619,7 +4602,7 @@ void HybridManufacturing::subtractive_remove_output(const vector<TRiangle>& need
 
 bool HybridManufacturing::CheckToolCollisionWithCell(
 	const Eigen::Vector3d& center_point,
-	const std::vector<Eigen::MatrixXd>& target_cell_vertices,
+	const std::vector<Eigen::Vector3d>& target_cell_vertices,
 	double max_z_target,
 	const cutter& nozzle,
 	double z_threshold_divisor,

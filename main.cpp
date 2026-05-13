@@ -106,7 +106,7 @@ int main()
 		Katana::Instance().stl.saveStlFromObj(file_name +"-0_0" + ".stl", V, F);
 		igl::writeOBJ(file_name + "-0_0" + ".obj", V, F); //新加的语句，加了以后beamsearch缺的obj补上了
 		HybridManufacturing HybridManufacturing(file_name, suff,V, F, N);
-		HybridManufacturing.open_vis_voronoi = 0;
+		HybridManufacturing.open_vis_voronoi = 1;
 		HybridManufacturing.open_vis_red_points = 0;
 		HybridManufacturing.open_vis_green_points = 0;
 		HybridManufacturing.open_vis_stair_case = 0;
@@ -117,11 +117,7 @@ int main()
 		//return 0;
 
 		// 替换原来的 HybridManufacturing.GetVoronoiCells1();
-		std::vector<vasco::VoronoiCell> voronoiCells;
-		std::vector<Eigen::Vector3d> bottomVertices;
-		vasco::BuildVoronoiCells(V, F, 2.0, voronoiCells, bottomVertices,
-			HybridManufacturing.open_vis_voronoi, file_name);
-		HybridManufacturing.InitializeVoronoi(voronoiCells, bottomVertices);
+		HybridManufacturing.InitializeVoronoi();
 
 		int flag = HybridManufacturing.CollisionDetectionForSubtractiveManufacturing(cutting_tool);
 		// 旧的调用方式

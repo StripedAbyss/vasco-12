@@ -118,11 +118,19 @@ std::vector<TRiangle> HybridManufacturing::FilterSurfaceRemoveTriangles(
 	return surface_triangles;
 }
 
-void HybridManufacturing::InitializeVoronoi(const std::vector<VoronoiCell>& cells,
-	const std::vector<Eigen::Vector3d>& bottom)
+void HybridManufacturing::InitializeVoronoi()
 {
-	all_voronoi_cells = cells;
-	V_bottom = bottom;
+
+	std::vector<vasco::VoronoiCell> voronoiCells;
+	std::vector<Eigen::Vector3d> bottomVertices;
+	vasco::BuildVoronoiCells(V, F, 2.0, voronoiCells, bottomVertices,
+		open_vis_voronoi, file_name);
+
+	vasco::BuildVoronoiCells(input_mesh, 2.0, voronoiCells, bottomVertices,
+		open_vis_voronoi, file_name);
+
+	all_voronoi_cells = voronoiCells;
+	V_bottom = bottomVertices;
 }
 
 void HybridManufacturing::InitializePolyscope()
@@ -923,25 +931,25 @@ all_value HybridManufacturing::GainMesh(
 	//将slicer旋转回原始位置
 	RotateSlicerPositions(all_slicer, vector_after, vectorBefore);
 
-	auto filtered_patch = FilterSurfaceRemoveTriangles(all_slicer, remove_triangles);
-	if (!all_slicer.positions.empty() && !filtered_patch.empty()) {
-		const std::string mesh_name = "all_slicer_" + std::to_string(height_of_beam_search) + "_" + std::to_string(cont_number_of_queue);
-		polyscope::registerSurfaceMesh(mesh_name, all_slicer.positions, filtered_patch);
-	}
+	//auto filtered_patch = FilterSurfaceRemoveTriangles(all_slicer, remove_triangles);
+	//if (!all_slicer.positions.empty() && !filtered_patch.empty()) {
+	//	const std::string mesh_name = "all_slicer_" + std::to_string(height_of_beam_search) + "_" + std::to_string(cont_number_of_queue);
+	//	polyscope::registerSurfaceMesh(mesh_name, all_slicer.positions, filtered_patch);
+	//}
 
-	if (height_of_beam_search > 1) {
-		subtractive_remove_output(filtered_patch, all_slicer, height_of_beam_search);
-		cutter cutter1;
-		int sub_patches = subtractive_accessibility_decomposition_local(height_of_beam_search, cutter1);
-		std::cout << "[GainMesh] sub_patches: " << sub_patches <<
-			" cont_number_of_queue " << cont_number_of_queue <<
-			" index_of_pre_node " << index_of_pre_node <<
-			" height_of_beam_search " << height_of_beam_search << endl;
-		all_calculated_value.value_of_sub_patches = 10.0 / sub_patches;
-		//polyscope::show();
+	//if (height_of_beam_search > 1) {
+	//	subtractive_remove_output(filtered_patch, all_slicer, height_of_beam_search);
+	//	cutter cutter1;
+	//	int sub_patches = subtractive_accessibility_decomposition_local(height_of_beam_search, cutter1);
+	//	std::cout << "[GainMesh] sub_patches: " << sub_patches <<
+	//		" cont_number_of_queue " << cont_number_of_queue <<
+	//		" index_of_pre_node " << index_of_pre_node <<
+	//		" height_of_beam_search " << height_of_beam_search << endl;
+	//	all_calculated_value.value_of_sub_patches = 10.0 / sub_patches;
+	//	//polyscope::show();
 
-		//cout << "()()()(" << double(end_time - start_time) / CLOCKS_PER_SEC << endl;
-	}
+	//	//cout << "()()()(" << double(end_time - start_time) / CLOCKS_PER_SEC << endl;
+	//}
 	return all_calculated_value;
 }
 

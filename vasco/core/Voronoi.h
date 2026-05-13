@@ -2,11 +2,17 @@
 #include <vector>
 #include <string>
 #include <Eigen/Dense>
+#include <CGAL/Exact_predicates_inexact_constructions_kernel.h>
+#include <CGAL/Surface_mesh.h>
 //#include "../../vectornd.h"
 #include "../../visual.h"
 
 namespace vasco
 {
+    using Kernel = CGAL::Exact_predicates_inexact_constructions_kernel;
+    using Point_3 = Kernel::Point_3;
+    using SurfaceMesh = CGAL::Surface_mesh<Point_3>;
+
     struct VoronoiCell
     {
         bool is_available{false};
@@ -22,6 +28,13 @@ namespace vasco
     // fileNameNoExt: 基础文件名（不含扩展名）
     void BuildVoronoiCells(const Eigen::MatrixXd& V,
                            const Eigen::MatrixXi& F,
+                           double thresholdZ,
+                           std::vector<VoronoiCell>& outCells,
+                           std::vector<Eigen::Vector3d>& outBottomVertices,
+                           bool visualize,
+                           const std::string& fileNameNoExt);
+
+    void BuildVoronoiCells(const SurfaceMesh& mesh,
                            double thresholdZ,
                            std::vector<VoronoiCell>& outCells,
                            std::vector<Eigen::Vector3d>& outBottomVertices,

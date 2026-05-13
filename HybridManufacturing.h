@@ -135,8 +135,7 @@ public:
 
 	//void GetVoronoiCells();              // 原函数保留
 	//void GetVoronoiCells1();          // 移除声明
-	void InitializeVoronoi(const std::vector<VoronoiCell>& cells,
-		const std::vector<Eigen::Vector3d>& bottom); // 新增
+	void InitializeVoronoi(); // 新增
 
 	void InitializePolyscope();
 

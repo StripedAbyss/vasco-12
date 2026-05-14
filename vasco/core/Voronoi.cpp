@@ -279,7 +279,8 @@ namespace vasco
 
 			}
 
-
+			std::reverse(all_boundary_V.begin(), all_boundary_V.end());
+			std::reverse(index_of_adjacent_V.begin(), index_of_adjacent_V.end());
 			all_lines.push_back(all_boundary_V);
 			outCells.push_back(std::move(new_cell));
 		}

@@ -3408,28 +3408,13 @@ void HybridManufacturing::outer_beam_search(nozzle the_nozzle, cutter cutting_to
 			if (!PrepareOrientationSliceData(sampling, ori, now_last_node, save_ori, rotMatrix, vectorAfter)) {
 				continue;
 			}
-			start_time_6 = clock();
-			vector<vector<vector<Vertex>>> all_slice_points;
-			vector<vector<vector<Vertex>>> all_slice_points_contain;
-			Katana::Instance().slicer.buildLayers();
-			Katana::Instance().slicer.buildSegments();
-			Katana::Instance().gcode.write(all_slice_points, all_slice_points_contain);	//katana分层并填充边界轮廓
-			end_time_6 = clock();
-			sum_time_4 += double(end_time_6 - start_time_6) / CLOCKS_PER_SEC;
-			/////////////////////////////////////
-			//std::cout << "aa" << Katana::Instance().vertices.size()<<" " << all_slice_points.size() << endl;
-			//generate additive dependency graph//
-			std::vector<Data> data;
-			data.resize(1);
-			data[0].ReadData(all_slice_points, all_slice_points_contain);
-			Layer_Graph layer_graph(data[0]);
-			//start_time_4 = clock();
-			start_time_4 = clock();
-			layer_graph.GetTrianglesForLayers(all_slice_points, Katana::Instance().map_segment_triangles, Katana::Instance().vertices, vectorAfter, height_of_beam_search, Tree_nodes_continue_id[now_last_node]);	//将切片轮廓映射到三角形集，建立每层三角形集合等中间信息？
-			layer_graph.GenerateDependencyEdges();	//生成增材分层依赖图的边
-			layer_graph.CollisionDetectionForAdditiveManufacturing(the_nozzle);	//增材的碰撞检测，标记增材的不可达点等信息
-			end_time_4 = clock();
-			sum_time_2 += double(end_time_4 - start_time_4) / CLOCKS_PER_SEC;
+			Layer_Graph layer_graph = BuildAdditiveLayerGraph(
+				vectorAfter,
+				height_of_beam_search,
+				Tree_nodes_continue_id[now_last_node],
+				the_nozzle,
+				sum_time_4,
+				sum_time_2);
 
 			//////////////////////////////////////
 			vector<Eigen::MatrixXd> fragile_V;
@@ -3967,6 +3952,40 @@ bool HybridManufacturing::PrepareOrientationSliceData(
 	}
 
 	return true;
+}
+
+// 保持函数签名与声明一致，避免不必要的声明差异。
+Layer_Graph HybridManufacturing::BuildAdditiveLayerGraph(
+	const Eigen::Vector3d& vector_after,
+	int height_of_beam_search,
+	int continue_node_id,
+	const nozzle& the_nozzle,
+	double& slicing_time,
+	double& graph_time)
+{
+	clock_t start_time_6 = clock();
+	vector<vector<vector<Vertex>>> all_slice_points;
+	vector<vector<vector<Vertex>>> all_slice_points_contain;
+	Katana::Instance().slicer.buildLayers();
+	Katana::Instance().slicer.buildSegments();
+	Katana::Instance().gcode.write(all_slice_points, all_slice_points_contain);	//katana分层并填充边界轮廓
+	clock_t end_time_6 = clock();
+	slicing_time += double(end_time_6 - start_time_6) / CLOCKS_PER_SEC;
+	/////////////////////////////////////
+	//std::cout << "aa" << Katana::Instance().vertices.size()<<" " << all_slice_points.size() << endl;
+	//generate additive dependency graph//
+	std::vector<Data> data;
+	data.resize(1);
+	data[0].ReadData(all_slice_points, all_slice_points_contain);
+	Layer_Graph layer_graph(data[0]);
+	clock_t start_time_4 = clock();
+	layer_graph.GetTrianglesForLayers(all_slice_points, Katana::Instance().map_segment_triangles, Katana::Instance().vertices, vector_after, height_of_beam_search, continue_node_id);	//将切片轮廓映射到三角形集，建立每层三角形集合等中间信息？
+	layer_graph.GenerateDependencyEdges();	//生成增材分层依赖图的边
+	layer_graph.CollisionDetectionForAdditiveManufacturing(the_nozzle);	//增材的碰撞检测，标记增材的不可达点等信息
+	clock_t end_time_4 = clock();
+	graph_time += double(end_time_4 - start_time_4) / CLOCKS_PER_SEC;
+
+	return layer_graph;
 }
 
 void HybridManufacturing::DFS_search(Layer_Graph layer_graph, bool& flag_continue, bool previous_is_continue, vector<bool> judge_S_be_searched, vector<bool> judge_covering_points_be_searched, bool& jud_admit)

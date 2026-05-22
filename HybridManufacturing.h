@@ -253,6 +253,14 @@ private:
 		Eigen::Matrix3d& rot_matrix,
 		Eigen::Vector3d& vector_after);
 
+	Layer_Graph BuildAdditiveLayerGraph(
+		const Eigen::Vector3d& vector_after,
+		int height_of_beam_search,
+		int continue_node_id,
+		const nozzle& the_nozzle,
+		double& slicing_time,
+		double& graph_time);
+
 	double UpdateSubtractiveDependencyGraph(
 		const vector<vector<area_S>>& ori_all_the_area_S,
 		vector<vector<bool>>& is_fragile_V_2,

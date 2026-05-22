@@ -245,6 +245,14 @@ private:
 		const int* pre_index_of_nodes,
 		double& sum_time_5);
 
+	bool PrepareOrientationSliceData(
+		const SAMPLE_ON_BALL& sampling,
+		int ori,
+		int now_last_node,
+		const vector<vector<Eigen::Vector3d>>& save_ori,
+		Eigen::Matrix3d& rot_matrix,
+		Eigen::Vector3d& vector_after);
+
 	double UpdateSubtractiveDependencyGraph(
 		const vector<vector<area_S>>& ori_all_the_area_S,
 		vector<vector<bool>>& is_fragile_V_2,

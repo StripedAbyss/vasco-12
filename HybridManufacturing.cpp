@@ -3404,54 +3404,9 @@ void HybridManufacturing::outer_beam_search(nozzle the_nozzle, cutter cutting_to
 			for (int j = 1; j <= ori * 20 / sampling.sample_points.size(); j++)
 				std::cout << "▉";
 
-			Eigen::Vector3d vectorContinue(sampling.sample_points[ori]);  //与祖先Node的ori相同时容易出现问题，暂时先避免用相同ori
-			int temp_now_last_node = now_last_node;
-			bool jud_continue = false;
-
-			for (int j = 0; j < save_ori[temp_now_last_node].size(); j++)
-				if (vectorContinue == save_ori[temp_now_last_node][j]) {
-					jud_continue = true;
-					break;
-				}
-
-			if (jud_continue == true && ori != 0) {
+			Eigen::Vector3d vectorAfter;
+			if (!PrepareOrientationSliceData(sampling, ori, now_last_node, save_ori, rotMatrix, vectorAfter)) {
 				continue;
-			}
-
-			//rotating the blocks and then slicing//
-			std::vector<Eigen::MatrixXd> temp_V;	//记录当前块的顶点信息，用于旋转
-			temp_V.resize(Katana::Instance().temp_vertices.size());
-
-			V_2.resize(V.rows());	//V_2记录输入模型网格V的顶点信息，用于旋转
-			for (int i = 0; i < Katana::Instance().temp_vertices.size(); i++) {
-				temp_V[i].resize(3, 1);
-				temp_V[i](0, 0) = Katana::Instance().temp_vertices[i].x;
-				temp_V[i](1, 0) = Katana::Instance().temp_vertices[i].y;
-				temp_V[i](2, 0) = Katana::Instance().temp_vertices[i].z;
-			}
-			for (int i = 0; i < V.rows(); i++) {
-				V_2[i].resize(3, 1);
-				V_2[i](0, 0) = V.row(i).x();
-				V_2[i](1, 0) = V.row(i).y();
-				V_2[i](2, 0) = V.row(i).z();
-			}
-			Eigen::Vector3d vectorBefore(0, 0, 1);
-			Eigen::Vector3d vectorAfter(sampling.sample_points[ori]);
-			rotMatrix = Eigen::Quaterniond::FromTwoVectors(vectorBefore, vectorAfter).toRotationMatrix();
-			for (int i = 0; i < Katana::Instance().vertices.size(); i++)
-				temp_V[i] = rotMatrix.inverse() * temp_V[i];	//将temp_V里的顶点坐标旋转，使得增材打印方向与z轴平行
-			for (int i = 0; i < V.rows(); i++)
-				V_2[i] = rotMatrix.inverse() * V_2[i];	//将V_2里的顶点坐标旋转，使得增材打印方向与z轴平行
-			for (int i = 0; i < Katana::Instance().vertices.size(); i++) {
-				Katana::Instance().vertices[i].x = temp_V[i](0, 0);
-				Katana::Instance().vertices[i].y = temp_V[i](1, 0);
-				Katana::Instance().vertices[i].z = temp_V[i](2, 0);	//将temp_V里的顶点坐标更新回Katana的vertices
-			}
-
-			for (int i = 0; i < Katana::Instance().triangles.size(); i++) {	//将每个三角形的顶点按z值从小到大排序，便于后续分层处理
-				if (Katana::Instance().triangles[i].vertices[0]->z > Katana::Instance().triangles[i].vertices[1]->z) std::swap(Katana::Instance().triangles[i].vertices[0], Katana::Instance().triangles[i].vertices[1]);
-				if (Katana::Instance().triangles[i].vertices[0]->z > Katana::Instance().triangles[i].vertices[2]->z) std::swap(Katana::Instance().triangles[i].vertices[0], Katana::Instance().triangles[i].vertices[2]);
-				if (Katana::Instance().triangles[i].vertices[1]->z > Katana::Instance().triangles[i].vertices[2]->z) std::swap(Katana::Instance().triangles[i].vertices[1], Katana::Instance().triangles[i].vertices[2]);
 			}
 			start_time_6 = clock();
 			vector<vector<vector<Vertex>>> all_slice_points;
@@ -3537,7 +3492,7 @@ void HybridManufacturing::outer_beam_search(nozzle the_nozzle, cutter cutting_to
 				Tree_nodes_error.push_back(false);
 			}
 		}
-		end_time_2 = clock();
+		
 
 
 		if (Tree_nodes_judge_continue[now_last_node] == false)
@@ -3953,6 +3908,65 @@ double HybridManufacturing::UpdateSubtractiveDependencyGraph(
 	}
 	clock_t end_time_5 = clock();
 	return double(end_time_5 - start_time_5) / CLOCKS_PER_SEC;
+}
+
+bool HybridManufacturing::PrepareOrientationSliceData(
+	const SAMPLE_ON_BALL& sampling,
+	int ori,
+	int now_last_node,
+	const vector<vector<Eigen::Vector3d>>& save_ori,
+	Eigen::Matrix3d& rot_matrix,
+	Eigen::Vector3d& vector_after)
+{
+	Eigen::Vector3d vector_continue(sampling.sample_points[ori]);  //与祖先Node的ori相同时容易出现问题，暂时先避免用相同ori
+	bool jud_continue = false;
+
+	for (int j = 0; j < save_ori[now_last_node].size(); j++)
+		if (vector_continue == save_ori[now_last_node][j]) {
+			jud_continue = true;
+			break;
+		}
+
+	if (jud_continue == true && ori != 0) {
+		return false;
+	}
+
+	std::vector<Eigen::MatrixXd> temp_V;	//记录当前块的顶点信息，用于旋转
+	temp_V.resize(Katana::Instance().temp_vertices.size());
+
+	V_2.resize(V.rows());	//V_2记录输入模型网格V的顶点信息，用于旋转
+	for (int i = 0; i < Katana::Instance().temp_vertices.size(); i++) {
+		temp_V[i].resize(3, 1);
+		temp_V[i](0, 0) = Katana::Instance().temp_vertices[i].x;
+		temp_V[i](1, 0) = Katana::Instance().temp_vertices[i].y;
+		temp_V[i](2, 0) = Katana::Instance().temp_vertices[i].z;
+	}
+	for (int i = 0; i < V.rows(); i++) {
+		V_2[i].resize(3, 1);
+		V_2[i](0, 0) = V.row(i).x();
+		V_2[i](1, 0) = V.row(i).y();
+		V_2[i](2, 0) = V.row(i).z();
+	}
+	Eigen::Vector3d vector_before(0, 0, 1);
+	vector_after = Eigen::Vector3d(sampling.sample_points[ori]);
+	rot_matrix = Eigen::Quaterniond::FromTwoVectors(vector_before, vector_after).toRotationMatrix();
+	for (int i = 0; i < Katana::Instance().vertices.size(); i++)
+		temp_V[i] = rot_matrix.inverse() * temp_V[i];	//将temp_V里的顶点坐标旋转，使得增材打印方向与z轴平行
+	for (int i = 0; i < V.rows(); i++)
+		V_2[i] = rot_matrix.inverse() * V_2[i];	//将V_2里的顶点坐标旋转，使得增材打印方向与z轴平行
+	for (int i = 0; i < Katana::Instance().vertices.size(); i++) {
+		Katana::Instance().vertices[i].x = temp_V[i](0, 0);
+		Katana::Instance().vertices[i].y = temp_V[i](1, 0);
+		Katana::Instance().vertices[i].z = temp_V[i](2, 0);	//将temp_V里的顶点坐标更新回Katana的vertices
+	}
+
+	for (int i = 0; i < Katana::Instance().triangles.size(); i++) {	//将每个三角形的顶点按z值从小到大排序，便于后续分层处理
+		if (Katana::Instance().triangles[i].vertices[0]->z > Katana::Instance().triangles[i].vertices[1]->z) std::swap(Katana::Instance().triangles[i].vertices[0], Katana::Instance().triangles[i].vertices[1]);
+		if (Katana::Instance().triangles[i].vertices[0]->z > Katana::Instance().triangles[i].vertices[2]->z) std::swap(Katana::Instance().triangles[i].vertices[0], Katana::Instance().triangles[i].vertices[2]);
+		if (Katana::Instance().triangles[i].vertices[1]->z > Katana::Instance().triangles[i].vertices[2]->z) std::swap(Katana::Instance().triangles[i].vertices[1], Katana::Instance().triangles[i].vertices[2]);
+	}
+
+	return true;
 }
 
 void HybridManufacturing::DFS_search(Layer_Graph layer_graph, bool& flag_continue, bool previous_is_continue, vector<bool> judge_S_be_searched, vector<bool> judge_covering_points_be_searched, bool& jud_admit)

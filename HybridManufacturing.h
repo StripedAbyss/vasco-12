@@ -94,8 +94,8 @@ using TRiangle = vasco::core::Tri3;
 using area_S = vasco::core::OrientationCollision;
 //using all_value = vasco::core::EvaluationScores;
 
-#include "vasco/core/Voronoi.h"  // ĞÂÔö
-using vasco::VoronoiCell;        // ¼æÈİ¾É´úÂë
+#include "vasco/core/Voronoi.h"  // æ–°å¢
+using vasco::VoronoiCell;        // å…¼å®¹æ—§ä»£ç 
 
 #include "vasco/Visualization.h"
 using vasco::createRedBalls;
@@ -133,9 +133,9 @@ public:
 	HybridManufacturing(std::string file_name, std::string suf, Eigen::MatrixXd V, Eigen::MatrixXi F, Eigen::MatrixXd Normals);
 	~HybridManufacturing();
 
-	//void GetVoronoiCells();              // Ô­º¯Êı±£Áô
-	//void GetVoronoiCells1();          // ÒÆ³ıÉùÃ÷
-	void InitializeVoronoi(); // ĞÂÔö
+	//void GetVoronoiCells();              // åŸå‡½æ•°ä¿ç•™
+	//void GetVoronoiCells1();          // ç§»é™¤å£°æ˜
+	void InitializeVoronoi(); // æ–°å¢
 
 	void InitializePolyscope();
 
@@ -224,7 +224,7 @@ public:
 		OrientationScores& pure_value,
 		int id_continue);
 	void sort_candidate_nodes(vector<int>& candidate_nodes, vector<vector<int>> Tree_nodes_for_S);
-	void subtractive_remove_output(const vector<TRiangle>& need_detect_triangle, const Slicer_2& current_slicer, int height_of_beam_search);
+	void subtractive_remove_output(const vector<TRiangle>& need_detect_triangle, const Slicer_2& current_slicer, int height_of_beam_search, int cont_number_of_queue);
 
 	// --- Visualization switches ---
 	bool open_vis_voronoi;
@@ -235,18 +235,38 @@ public:
 
 private:
 	void InitializeSurfaceMeshFromVF();
+	void PrepareOuterBeamSearchNode(
+		queue<int>& last_step_nodes,
+		vector<vector<bool>>& is_fragile_V_2,
+		int& now_last_node,
+		int height_of_beam_search,
+		int cont_number_of_queue,
+		const vector<bool>& tree_nodes_judge_continue,
+		const int* pre_index_of_nodes,
+		double& sum_time_5);
+
+	double UpdateSubtractiveDependencyGraph(
+		const vector<vector<area_S>>& ori_all_the_area_S,
+		vector<vector<bool>>& is_fragile_V_2,
+		int now_last_node,
+		int height_of_beam_search,
+		int cont_number_of_queue,
+		const vector<bool>& tree_nodes_judge_continue,
+		const vector<int>& tree_nodes_continue_id,
+		vector<bool>& judge_S_be_searched,
+		vector<bool>& judge_covering_points_be_searched);
 
 	std::vector<TRiangle> FilterSurfaceRemoveTriangles(
 		const Slicer_2& slicer,
 		const std::vector<TRiangle>& remove_triangles) const;
 
 	/**
-	 * @brief ¼ì²âµ¶¾ßÊÇ·ñÓëÖ¸¶¨µÄÈı½ÇĞÎÃæÆ¬·¢ÉúÅö×²
-	 * @param center_point µ¶¼âÇòĞÄ×ø±ê
-	 * @param target_cell_vertices Ä¿±êµ¥ÔªµÄ±ß½ç¶¥µã£¨ÒÑĞı×ª£©
-	 * @param max_z_target Ä¿±êµ¥Ôª±ß½ç¶¥µãµÄ×î´ózÖµ
-	 * @param nozzle µ¶¾ß²ÎÊı
-	 * @return true ±íÊ¾·¢ÉúÅö×²£¬false ±íÊ¾ÎŞÅö×²
+	 * @brief æ£€æµ‹åˆ€å…·æ˜¯å¦ä¸æŒ‡å®šçš„ä¸‰è§’å½¢é¢ç‰‡å‘ç”Ÿç¢°æ’
+	 * @param center_point åˆ€å°–çƒå¿ƒåæ ‡
+	 * @param target_cell_vertices ç›®æ ‡å•å…ƒçš„è¾¹ç•Œé¡¶ç‚¹ï¼ˆå·²æ—‹è½¬ï¼‰
+	 * @param max_z_target ç›®æ ‡å•å…ƒè¾¹ç•Œé¡¶ç‚¹çš„æœ€å¤§zå€¼
+	 * @param nozzle åˆ€å…·å‚æ•°
+	 * @return true è¡¨ç¤ºå‘ç”Ÿç¢°æ’ï¼Œfalse è¡¨ç¤ºæ— ç¢°æ’
 	 */
 	bool CheckToolCollisionWithCell(
 		const Eigen::Vector3d& center_point,
@@ -295,14 +315,14 @@ private:
 	Eigen::MatrixXi F;
 	SurfaceMesh input_mesh;
 	Eigen::MatrixXd Normals;
-	std::vector<Eigen::Vector3d> V_bottom;              // ÈÔÊ¹ÓÃ
-	std::vector<VoronoiCell> all_voronoi_cells; // ÀàĞÍ¸ÄÎªÃüÃû¿Õ¼ä°æ±¾
+	std::vector<Eigen::Vector3d> V_bottom;              // ä»ä½¿ç”¨
+	std::vector<VoronoiCell> all_voronoi_cells; // ç±»å‹æ”¹ä¸ºå‘½åç©ºé—´ç‰ˆæœ¬
 
-	vector<vector<bool>> is_fragile_V;	//is_fragile_V´æ´¢ÔÚ¸÷¸ö·½ÏòÏÂÃ¿¸ö¶¥µãÊÇ·ñÎªfragileµã
-	vector<vector<area_S>> all_the_area_S;	//all_the_area_S[i][j]´æ´¢µÚi¸ö²»¿É´ïµãµÄµÚj¸öarea_S£¬area_S°üº¬Åö×²µ¥ÔªºÍ·½Ïò
-	vector<vector<area_S>> all_the_covering_points;	//all_the_covering_points´æ´¢Ã¿¸ö¸²¸Çµã¶ÔÓ¦µÄÅö×²µ¥ÔªºÍ·½Ïòarea_S
-	unordered_map<int, int> map_S_and_vertex;	//map_S_and_vertex´æ´¢area_S.id_to_pointµ½Ô­Ê¼Íø¸ñ¶¥µãµÄÓ³Éä,¼ÇÂ¼²»¿É´ïµãÔÚvoronoiÍ¼ÖĞµÄË÷Òı <²»¿É´ïµãid,voronoiµÄid>
-	unordered_map<int, int> map_S_and_vertex_inv;	//map_S_and_vertexµÄ·´ÏòÓ³Éä£¬¼ÇÂ¼Ô­Ê¼voronoiµ¥Ôª¶ÔÓ¦µÄ²»¿É´ïµãË÷Òı <voronoiµÄid,²»¿É´ïµãid>
+	vector<vector<bool>> is_fragile_V;	//is_fragile_Vå­˜å‚¨åœ¨å„ä¸ªæ–¹å‘ä¸‹æ¯ä¸ªé¡¶ç‚¹æ˜¯å¦ä¸ºfragileç‚¹
+	vector<vector<area_S>> all_the_area_S;	//all_the_area_S[i][j]å­˜å‚¨ç¬¬iä¸ªä¸å¯è¾¾ç‚¹çš„ç¬¬jä¸ªarea_Sï¼Œarea_SåŒ…å«ç¢°æ’å•å…ƒå’Œæ–¹å‘
+	vector<vector<area_S>> all_the_covering_points;	//all_the_covering_pointså­˜å‚¨æ¯ä¸ªè¦†ç›–ç‚¹å¯¹åº”çš„ç¢°æ’å•å…ƒå’Œæ–¹å‘area_S
+	unordered_map<int, int> map_S_and_vertex;	//map_S_and_vertexå­˜å‚¨area_S.id_to_pointåˆ°åŸå§‹ç½‘æ ¼é¡¶ç‚¹çš„æ˜ å°„,è®°å½•ä¸å¯è¾¾ç‚¹åœ¨voronoiå›¾ä¸­çš„ç´¢å¼• <ä¸å¯è¾¾ç‚¹id,voronoiçš„id>
+	unordered_map<int, int> map_S_and_vertex_inv;	//map_S_and_vertexçš„åå‘æ˜ å°„ï¼Œè®°å½•åŸå§‹voronoiå•å…ƒå¯¹åº”çš„ä¸å¯è¾¾ç‚¹ç´¢å¼• <voronoiçš„id,ä¸å¯è¾¾ç‚¹id>
 	unordered_map<int, int> map_covering_points_and_vertex;
 	unordered_map<int, int> map_covering_points_and_vertex_inv;
 	vector<int> flag_voronoi_has_been_printed;
@@ -313,8 +333,8 @@ private:
 
 	vector<vector<int>> ori_num_points_of_ori_in_all_the_area_S;
 	vector<vector<int>> pathes_include_S, pathes_include_sample_points, paths_include_covering_points;
-	vector<vector<int>> all_cut_layers; // ´æ´¢Ã¿ÌõÂ·¾¶ÖĞµÄÇĞ¸î²ãÔÚfinal_pathes[i]ÖĞµÄÏÂ±ê
-	vector<vector<int>> all_cut_layers_dependency_layer; // ´æ´¢Ã¿ÌõÂ·¾¶ÖĞÃ¿¸öÇĞ¸î²ãËùÒÀÀµµÄÇĞ¸î²ãÊıÁ¿
+	vector<vector<int>> all_cut_layers; // å­˜å‚¨æ¯æ¡è·¯å¾„ä¸­çš„åˆ‡å‰²å±‚åœ¨final_pathes[i]ä¸­çš„ä¸‹æ ‡
+	vector<vector<int>> all_cut_layers_dependency_layer; // å­˜å‚¨æ¯æ¡è·¯å¾„ä¸­æ¯ä¸ªåˆ‡å‰²å±‚æ‰€ä¾èµ–çš„åˆ‡å‰²å±‚æ•°é‡
 	vector<vector<area_S>> ori_all_the_covering_points;
 	vector<vector<vector<cv::Point3d>>> all_solutions_of_selected_layers;
 	vector<vector<vector<cv::Point3d>>> all_solutions_of_selected_layers_contain;

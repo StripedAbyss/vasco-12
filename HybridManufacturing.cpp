@@ -123,12 +123,38 @@ void HybridManufacturing::InitializeVoronoi()
 
 	std::vector<vasco::VoronoiCell> voronoiCells;
 	std::vector<Eigen::Vector3d> bottomVertices;
+
+	std::vector<vasco::VoronoiCell> voronoiCells1;
+	std::vector<Eigen::Vector3d> bottomVertices1;
 	vasco::BuildVoronoiCells(V, F, 2.0, voronoiCells, bottomVertices,
 		open_vis_voronoi, file_name);
 
-	vasco::BuildVoronoiCells(input_mesh, 2.0, voronoiCells, bottomVertices,
+	vasco::BuildVoronoiCells(input_mesh, 2.0, voronoiCells1, bottomVertices1,
 		open_vis_voronoi, file_name);
 
+	size_t cell_cnt = voronoiCells.size();
+	for (size_t i = 0; i < cell_cnt; i++) {
+		if (voronoiCells[i].is_available != voronoiCells1[i].is_available) {
+			std::cerr << "Error: Voronoi cell availability mismatch at index " << i << std::endl;
+		}
+		if (voronoiCells[i].is_available) {
+			size_t point_cnt = voronoiCells[i].all_points_in_polygon.size();
+			if (point_cnt != voronoiCells1[i].all_points_in_polygon.size()) {
+				std::cerr << "Error: Voronoi cell point count mismatch at index " << i << std::endl;
+			}
+			//for (size_t j = 0; j < point_cnt; j++) {
+			//	if ((voronoiCells[i].all_points_in_polygon[j] - voronoiCells1[i].all_points_in_polygon[j]).norm() > 1e-6) {
+			//		std::cerr << "Error: Voronoi cell point mismatch at index " << i << ", point " << j << std::endl;
+			//	}
+			//}
+			if (voronoiCells[i].site != voronoiCells1[i].site) {
+				std::cerr << "Error: Voronoi cell site mismatch at index " << i << std::endl;
+			}
+			if (voronoiCells[i].adjacent_cells.size() != voronoiCells1[i].adjacent_cells.size()) {
+				std::cerr << "Error: Voronoi cell adjacent cell count mismatch at index " << i << std::endl;
+			}
+		}
+	}
 	all_voronoi_cells = voronoiCells;
 	V_bottom = bottomVertices;
 }
@@ -173,29 +199,30 @@ int HybridManufacturing::CollisionDetectionForSubtractiveManufacturing(cutter th
 		std::vector<Eigen::Vector3d> temp_V;
 		temp_V.resize(V.rows());	//temp_V存储旋转后的模型顶点
 		for (int i = 0; i < V.rows(); i++) {
-			temp_V[i](0, 0) = V.row(i).x();
-			temp_V[i](1, 0) = V.row(i).y();
-			temp_V[i](2, 0) = V.row(i).z();
+			temp_V[i].x() = V.row(i).x();
+			temp_V[i].y() = V.row(i).y();
+			temp_V[i].z() = V.row(i).z();
 		}
 		vector<std::vector<Eigen::Vector3d>> temp_new_V;	//temp_new_V存储旋转后的voronoi面边界顶点
 		temp_new_V.resize(V.rows());
 		for (int i = 0; i < V.rows(); i++) {
 			temp_new_V[i].resize(all_voronoi_cells[i].all_points_in_polygon.size());
 			for (int k = 0; k < temp_new_V[i].size(); k++) {
-				temp_new_V[i][k](0, 0) = all_voronoi_cells[i].all_points_in_polygon[k].x();
-				temp_new_V[i][k](1, 0) = all_voronoi_cells[i].all_points_in_polygon[k].y();
-				temp_new_V[i][k](2, 0) = all_voronoi_cells[i].all_points_in_polygon[k].z();
+				temp_new_V[i][k].x() = all_voronoi_cells[i].all_points_in_polygon[k].x();
+				temp_new_V[i][k].y() = all_voronoi_cells[i].all_points_in_polygon[k].y();
+				temp_new_V[i][k].z() = all_voronoi_cells[i].all_points_in_polygon[k].z();
 			}
 		}
 
 		Eigen::Vector3d vectorBefore(0, 0, 1);
 		Eigen::Vector3d vectorAfter(sampling_subtractive.sample_points[ori]);
 		rotMatrix = Eigen::Quaterniond::FromTwoVectors(vectorBefore, vectorAfter).toRotationMatrix();	//计算从z轴到采样方向的旋转矩阵
+		Eigen::Matrix3d rotMatrix_inverse = rotMatrix.inverse();
 		for (int i = 0; i < V.rows(); i++)
-			temp_V[i] = rotMatrix.inverse() * temp_V[i];
+			temp_V[i] = rotMatrix_inverse * temp_V[i];
 		for (int i = 0; i < V.rows(); i++)
 			for (int j = 0; j < temp_new_V[i].size(); j++)
-				temp_new_V[i][j] = rotMatrix.inverse() * temp_new_V[i][j];
+				temp_new_V[i][j] = rotMatrix_inverse * temp_new_V[i][j];
 		//////////////////////////////////////////////
 
 
@@ -207,33 +234,36 @@ int HybridManufacturing::CollisionDetectionForSubtractiveManufacturing(cutter th
 
 		vector<vector<Eigen::Vector3d>> temp_vis;
 		for (int i = 0; i < all_voronoi_cells.size(); i++) {
-			if (all_voronoi_cells[i].is_available == true) {
-				//all_normal_of_triangles_in_cells[i].resize(all_voronoi_cells[i].all_points_in_polygon.size());
-				all_normal_of_cells[i].x() = all_normal_of_cells[i].y() = all_normal_of_cells[i].z() = 0;
-				for (int j = 0; j < 1; j++) {	//计算voronoi单元法向量时只用第一个三角形？v1是site，v2、v3是边界顶点
-					Eigen::Vector3d v1 = ToVector3(temp_V[all_voronoi_cells[i].site]);
-					Eigen::Vector3d v2 = ToVector3(temp_new_V[i][j]);
-					Eigen::Vector3d v3 = ToVector3(temp_new_V[i][(j + 1) % all_voronoi_cells[i].all_points_in_polygon.size()]);
-					Eigen::Vector3d vn = (v2 - v1).cross(v3 - v1);
-					//all_normal_of_triangles_in_cells[i][j] = vn;
-					all_normal_of_cells[i].x() += vn.x();
-					all_normal_of_cells[i].y() += vn.y();
-					all_normal_of_cells[i].z() += vn.z();
+			const auto& cell = all_voronoi_cells[i];
+			if (cell.is_available == true) {
+				const auto polygon_size = cell.all_points_in_polygon.size();
+				const int site_index = cell.site;
+
+				Eigen::Vector3d vn_sum(0.0, 0.0, 0.0);
+				for (int j = 0; j < polygon_size; j++) {
+					const Eigen::Vector3d v1 = ToVector3(temp_V[site_index]);
+					const Eigen::Vector3d v2 = ToVector3(temp_new_V[i][j]);
+					const Eigen::Vector3d v3 = ToVector3(temp_new_V[i][(j + 1) % polygon_size]);
+					vn_sum += (v2 - v1).cross(v3 - v1);
 				}
-				all_normal_of_cells[i] /= all_voronoi_cells[i].all_points_in_polygon.size();
+
+				all_normal_of_cells[i] = vn_sum;
+				if (polygon_size > 0) {
+					all_normal_of_cells[i] /= polygon_size;
+				}
 				all_normal_of_cells[i].normalize();	//voronoi单元法向量归一化
 
 				all_voronoi_cells[i].all_normal_in_all_ori.push_back(all_normal_of_cells[i]);	//将该采样方向下的法向量存入all_voronoi_cells的all_normal_in_all_ori中
 
-				vector<Eigen::Vector3d> temp_vec;
-				temp_vis.push_back(temp_vec);
+				temp_vis.push_back({});
+				temp_vis.back().reserve(2);
 				Eigen::Vector3d v_site(
-					temp_V[all_voronoi_cells[i].site](0, 0),
-					temp_V[all_voronoi_cells[i].site](1, 0),
-					temp_V[all_voronoi_cells[i].site](2, 0));
+					temp_V[site_index].x(),
+					temp_V[site_index].y(),
+					temp_V[site_index].z());
 				Eigen::Vector3d v_normal = v_site + all_normal_of_cells[i] * 3.0;
-				temp_vis[temp_vis.size() - 1].push_back(v_site);
-				temp_vis[temp_vis.size() - 1].push_back(v_normal);
+				temp_vis.back().push_back(v_site);
+				temp_vis.back().push_back(v_normal);
 			}
 		}
 		if (ori == 0) {
@@ -1467,6 +1497,12 @@ void HybridManufacturing::CutMesh(
 	int id_continue,
 	vector<int> flag_cut_layers_is_hole)
 {
+	std::cout << "[HybridManufacturing::CutMesh] height_of_beam_search: " << height_of_beam_search
+		<< " cont_number_of_queue: " << cont_number_of_queue
+		<< " index_of_pre_node: " << index_of_pre_node
+		<< " id_node: " << id_node
+		<< " id_continue: " << id_continue
+		<< std::endl;
 	bool using_solid_model = true;
 
 	std::vector<bool> jud_triangle_have_been_added;	//三角形是否被添加进remove_triangles
@@ -1956,6 +1992,11 @@ void HybridManufacturing::CutMesh(
 					jud_select_id = 1;
 					break;
 				}
+			}
+			if (cont_segment > 50000) {
+				jud_select = false;
+				break;
+				//real_cutting_plane_triangles[i].clear();
 			}
 			if (cont_segment > 1000000) {
 				jud_select = false;
@@ -2485,7 +2526,7 @@ void HybridManufacturing::subtractive_accessibility_decomposition(
 	}
 	all_balls.close();*/
 	for (int t = 0; t < vis_lines.size(); t++) {
-		std::ofstream dstream(".\\vis\\patch-" + to_string(height_of_beam_search) + "_" + to_string(t) + ".stl");
+		std::ofstream dstream(".\\vis\\patch-" + to_string(height_of_beam_search) + "_" + to_string(cont_number_of_queue) + "_" + to_string(t) + ".stl");
 		if (!dstream.is_open()) {
 			std::cout << "can not open " << std::endl;
 			return;
@@ -2504,7 +2545,7 @@ void HybridManufacturing::subtractive_accessibility_decomposition(
 		dstream.close();
 	}
 	for (int t = 0; t < vis_triangles.size(); t++) {
-		std::string mesh_name = "subtractive_patch_" + to_string(height_of_beam_search) + "_" + to_string(t);
+		std::string mesh_name = "subtractive_patch_" + to_string(height_of_beam_search) + "_" + to_string(cont_number_of_queue) + "_" + to_string(t);
 		polyscope::registerSurfaceMesh(mesh_name, vis_positions, vis_triangles[t]);
 	}
 	polyscope::show();
@@ -3190,6 +3231,42 @@ vector<vector<int>> HybridManufacturing::getAccessOri(const Slicer_2& slicer, Sl
 	return accessible_ori_of_need_detect_V;
 }
 
+void HybridManufacturing::PrepareOuterBeamSearchNode(
+	queue<int>& last_step_nodes,
+	vector<vector<bool>>& is_fragile_V_2,
+	int& now_last_node,
+	int height_of_beam_search,
+	int cont_number_of_queue,
+	const vector<bool>& tree_nodes_judge_continue,
+	const int* pre_index_of_nodes,
+	double& sum_time_5)
+{
+	clock_t start_time_2 = clock();
+	is_fragile_V_2 = is_fragile_V;	//fragile信息的快照
+	now_last_node = last_step_nodes.front();
+	/*if (Tree_nodes_error[now_last_node] == true) {
+		last_step_nodes.pop();
+		continue;
+	}*/
+
+	cout << endl << "Slicing and inner-beam-search......" << endl;
+	//load blocks//
+	const char* config_path = "config.ini";
+	Katana::Instance().config.loadConfig(config_path);
+	if (tree_nodes_judge_continue[now_last_node] == false) {
+		Katana::Instance().stl.loadStl((file_name + "-" + to_string(height_of_beam_search) + "_" + to_string(cont_number_of_queue) + ".stl").c_str());	//加载当前节点对应的模型
+		cout << "T" << endl;
+	}
+	else {
+		Katana::Instance().stl.loadStl((file_name + "-" + to_string(height_of_beam_search - 1) + "_" + to_string(pre_index_of_nodes[now_last_node]) + ".stl").c_str());
+		cout << "U" << now_last_node << endl;
+	}
+	Katana::Instance().temp_vertices.resize(Katana::Instance().vertices.size());	//更新当前模型的顶点信息
+	Katana::Instance().temp_vertices = Katana::Instance().vertices;
+	clock_t end_time_2 = clock();
+	sum_time_5 += double(end_time_2 - start_time_2) / CLOCKS_PER_SEC;
+}
+
 void HybridManufacturing::outer_beam_search(nozzle the_nozzle, cutter cutting_tool)
 {
 	int W1 = 1;  //4
@@ -3289,118 +3366,31 @@ void HybridManufacturing::outer_beam_search(nozzle the_nozzle, cutter cutting_to
 			W1 = 5;
 		else
 			W1 = 1;*/
-		start_time_2 = clock();
-		vector<vector<bool>> is_fragile_V_2 = is_fragile_V;	//fragile信息的快照
-		int now_last_node = last_step_nodes.front();
-		/*if (Tree_nodes_error[now_last_node] == true) {
-			last_step_nodes.pop();
-			continue;
-		}*/
-
-		cout << endl << "Slicing and inner-beam-search......" << endl;
-		//load blocks//
-		const char* config_path = "config.ini";
-		Katana::Instance().config.loadConfig(config_path);
-		if (Tree_nodes_judge_continue[now_last_node] == false) {
-			Katana::Instance().stl.loadStl((file_name + "-" + to_string(height_of_beam_search) + "_" + to_string(cont_number_of_queue) + ".stl").c_str());	//加载当前节点对应的模型
-			cout << "T" << endl;
-		}
-		else {
-			Katana::Instance().stl.loadStl((file_name + "-" + to_string(height_of_beam_search - 1) + "_" + to_string(pre_index_of_nodes[now_last_node]) + ".stl").c_str());
-			cout << "U" << now_last_node << endl;
-		}
-		Katana::Instance().temp_vertices.resize(Katana::Instance().vertices.size());	//更新当前模型的顶点信息
-		Katana::Instance().temp_vertices = Katana::Instance().vertices;
-		end_time_2 = clock();
-		sum_time_5 += double(end_time_2 - start_time_2) / CLOCKS_PER_SEC;
+		vector<vector<bool>> is_fragile_V_2;
+		int now_last_node = -1;
+		PrepareOuterBeamSearchNode(
+			last_step_nodes,
+			is_fragile_V_2,
+			now_last_node,
+			height_of_beam_search,
+			cont_number_of_queue,
+			Tree_nodes_judge_continue,
+			pre_index_of_nodes,
+			sum_time_5);
 		//////////////
 
-		start_time_5 = clock();
-		//update subtractive dependency graph//
-		vector<int> index_V_in_the_remaining_blocks;
-		vector<int> S_in_block;
-		vector<int> sample_points_in_block;	//记录不存在于当前块中的顶点索引
-		vector<int> covering_points_in_block;	//记录被碰撞单元索引
-		vector<bool> judge_S_be_searched; vector<bool> judge_covering_points_be_searched;
-		judge_S_be_searched.clear(); judge_covering_points_be_searched.clear();
-		judge_S_be_searched.resize(all_the_area_S.size());
-		judge_covering_points_be_searched.resize(all_the_covering_points.size());
-		for (int i = 0; i < all_the_area_S.size(); i++)
-			judge_S_be_searched[i] = false;
-		for (int i = 0; i < all_the_covering_points.size(); i++)
-			judge_covering_points_be_searched[i] = false;
-		S_in_block.clear(); sample_points_in_block.clear(); covering_points_in_block.clear(); index_V_in_the_remaining_blocks.clear();
-		for (int i = 0; i < V.rows(); i++) {	//枚举原始输入模型网格V的所有顶点，判断该顶点是否仍存在于当前块中
-			bool jud_still_exist = false;
-			/*if (flag_sample_point_used[i])
-				continue;*/
-			for (int j = 0; j < Katana::Instance().vertices.size(); j++) {
-				if (abs(V(i, 0) - Katana::Instance().vertices[j].x) <= 0.001 && abs(V(i, 1) - Katana::Instance().vertices[j].y) <= 0.001 && abs(V(i, 2) - Katana::Instance().vertices[j].z) <= 0.001) {
-					index_V_in_the_remaining_blocks.push_back(i);	//如果判断该顶点仍存在于当前块中，则将其索引i加入index_V_in_the_remaining_blocks
-					jud_still_exist = true;	//标记该顶点仍存在
-					//flag_sample_point_used[i] = true;
-					break;
-				}
-			}
-
-			if (jud_still_exist == false) {	//如果该顶点不存在于当前块中
-				for (int k = 0; k < is_fragile_V_2.size(); k++)
-					is_fragile_V_2[k][i] = false;	//is_fragile_V_2中对应该顶点的信息全部置为false
-				sample_points_in_block.push_back(i);
-				for (int k = 0; k < map_S_and_vertex.size(); k++) {
-					if (map_S_and_vertex[k] == i)
-						S_in_block.push_back(k);	//将该顶点对应的不可达索引加入S_in_block
-				}
-				for (int k = 0; k < map_covering_points_and_vertex.size(); k++) {
-					if (map_covering_points_and_vertex[k] == i)
-						covering_points_in_block.push_back(k);	//将该顶点对应的被碰撞单元索引加入covering_points_in_block
-				}
-			}
-		}
-
-		/*while (pre_tree_nodes[now_last_node] != -1) {
-			for (int i = 0; i < final_pathes_include_S[now_last_node].size(); i++) {
-				S_in_block.push_back(final_pathes_include_S[now_last_node][i]);
-			}
-			for (int i = 0; i < final_pathes_include_sample_points[now_last_node].size(); i++) {
-				sample_points_in_block.push_back(final_pathes_include_sample_points[now_last_node][i]);
-			}
-			now_last_node = pre_tree_nodes[now_last_node];
-		}
-		now_last_node = last_step_nodes.front();*/
-
-		for (int i = 0; i < S_in_block.size(); i++)
-			judge_S_be_searched[S_in_block[i]] = true;
-
-		ori_num_points_of_ori_in_all_the_area_S.clear();
-		ori_num_points_of_ori_in_all_the_area_S.resize(ori_all_the_area_S.size());	//为每个不可达点在ori_num_points_of_ori_in_all_the_area_S分配一个向量
-		for (int i = 0; i < ori_all_the_area_S.size(); i++) {
-			ori_num_points_of_ori_in_all_the_area_S[i].resize(sampling_subtractive.sample_points.size());	//每个不可达点记录在各个采样方向上对应的点数
-			for (int j = 0; j < ori_num_points_of_ori_in_all_the_area_S[i].size(); j++)
-				ori_num_points_of_ori_in_all_the_area_S[i][j] = 0;
-		}
-		for (int i = 0; i < ori_all_the_area_S.size(); i++) {	//枚举每个不可达点
-			for (int itr = 0; itr < ori_all_the_area_S[i].size(); itr++) {	//枚举该不可达点对应的所有area_S
-				ori_num_points_of_ori_in_all_the_area_S[i][ori_all_the_area_S[i][itr].oriId]++;	//统计该不可达点在各个采样方向上对应的点数
-			}
-		}
-		for (int i = 0; i < sample_points_in_block.size(); i++) {  //枚举每个不存在于当前块中的顶点
-			for (int j = 0; j < all_the_covering_points[map_covering_points_and_vertex_inv[sample_points_in_block[i]]].size(); j++) {
-				int index = all_the_covering_points[map_covering_points_and_vertex_inv[sample_points_in_block[i]]][j].pointId;
-				int ori = all_the_covering_points[map_covering_points_and_vertex_inv[sample_points_in_block[i]]][j].oriId;
-				ori_num_points_of_ori_in_all_the_area_S[index][ori]--;	//更新该不可达点在该采样方向上对应的点数
-			}
-		}
-		for (int i = 0; i < covering_points_in_block.size(); i++)
-			judge_covering_points_be_searched[covering_points_in_block[i]] = true;	//标记需要更新的被碰撞单元
-
-		if (Tree_nodes_judge_continue[now_last_node] == true) {
-			Katana::Instance().stl.loadStl((file_name + "-" + to_string(height_of_beam_search) + "_" + to_string(cont_number_of_queue) + "_" + to_string(Tree_nodes_continue_id[now_last_node]) + "_subblock.stl").c_str());
-			Katana::Instance().temp_vertices.resize(Katana::Instance().vertices.size());
-			Katana::Instance().temp_vertices = Katana::Instance().vertices;
-		}
-		end_time_5 = clock();
-		sum_time_3 += double(end_time_5 - start_time_5) / CLOCKS_PER_SEC;
+		vector<bool> judge_S_be_searched;
+		vector<bool> judge_covering_points_be_searched;
+		sum_time_3 += UpdateSubtractiveDependencyGraph(
+			ori_all_the_area_S,
+			is_fragile_V_2,
+			now_last_node,
+			height_of_beam_search,
+			cont_number_of_queue,
+			Tree_nodes_judge_continue,
+			Tree_nodes_continue_id,
+			judge_S_be_searched,
+			judge_covering_points_be_searched);
 		/////////////////////////////////////
 
 		/*int end;
@@ -3753,10 +3743,11 @@ void HybridManufacturing::outer_beam_search(nozzle the_nozzle, cutter cutting_to
 
 				if (height_of_beam_search <= 15) {
 					//cout << save_ori[candidate_nodes[cont_w]].x() <<" "<< save_ori[candidate_nodes[cont_w]].y() << " " << save_ori[candidate_nodes[cont_w]].z() << endl;
-					subtractive_accessibility_decomposition(current_remove_triangles, height_of_beam_search, index_of_pre_node, cutting_tool, current_slicer);
+					subtractive_accessibility_decomposition(current_remove_triangles, height_of_beam_search, cont_number_of_queue, cutting_tool, current_slicer);
+					//subtractive_accessibility_decomposition(current_remove_triangles, height_of_beam_search, index_of_pre_node, cutting_tool, current_slicer);
 				}
 
-				subtractive_remove_output(current_remove_triangles, current_slicer, height_of_beam_search);
+				subtractive_remove_output(current_remove_triangles, current_slicer, height_of_beam_search, cont_number_of_queue);
 
 				cont_number_of_queue++;
 				//////////////////////////////////////
@@ -3829,7 +3820,7 @@ void HybridManufacturing::outer_beam_search(nozzle the_nozzle, cutter cutting_to
 				//输入你想写入的内容 
 				f << 0 << endl;
 				f.close();
-				break;
+				//break;
 			}
 			if (jud_continue_last_node == true)
 				cout << endl << "--------------------- height of outer-beam search: " << height_of_beam_search << " ---------------------";
@@ -3861,6 +3852,107 @@ void HybridManufacturing::outer_beam_search(nozzle the_nozzle, cutter cutting_to
 	cout << "TTYTYTYTYTY";
 
 	//subtractive_accessibility_decomposition_global(height_of_beam_search, cutting_tool);
+}
+
+double HybridManufacturing::UpdateSubtractiveDependencyGraph(
+	const vector<vector<area_S>>& ori_all_the_area_S,
+	vector<vector<bool>>& is_fragile_V_2,
+	int now_last_node,
+	int height_of_beam_search,
+	int cont_number_of_queue,
+	const vector<bool>& tree_nodes_judge_continue,
+	const vector<int>& tree_nodes_continue_id,
+	vector<bool>& judge_S_be_searched,
+	vector<bool>& judge_covering_points_be_searched)
+{
+	clock_t start_time_5 = clock();
+	vector<int> index_V_in_the_remaining_blocks;
+	vector<int> S_in_block;
+	vector<int> sample_points_in_block;	//记录不存在于当前块中的顶点索引
+	vector<int> covering_points_in_block;	//记录被碰撞单元索引
+	judge_S_be_searched.clear();
+	judge_covering_points_be_searched.clear();
+	judge_S_be_searched.resize(all_the_area_S.size());
+	judge_covering_points_be_searched.resize(all_the_covering_points.size());
+	for (int i = 0; i < all_the_area_S.size(); i++)
+		judge_S_be_searched[i] = false;
+	for (int i = 0; i < all_the_covering_points.size(); i++)
+		judge_covering_points_be_searched[i] = false;
+	S_in_block.clear();
+	sample_points_in_block.clear();
+	covering_points_in_block.clear();
+	index_V_in_the_remaining_blocks.clear();
+	for (int i = 0; i < V.rows(); i++) {	//枚举原始输入模型网格V的所有顶点，判断该顶点是否仍存在于当前块中
+		bool jud_still_exist = false;
+		/*if (flag_sample_point_used[i])
+			continue;*/
+		for (int j = 0; j < Katana::Instance().vertices.size(); j++) {
+			if (abs(V(i, 0) - Katana::Instance().vertices[j].x) <= 0.001 && abs(V(i, 1) - Katana::Instance().vertices[j].y) <= 0.001 && abs(V(i, 2) - Katana::Instance().vertices[j].z) <= 0.001) {
+				index_V_in_the_remaining_blocks.push_back(i);	//如果判断该顶点仍存在于当前块中，则将其索引i加入index_V_in_the_remaining_blocks
+				jud_still_exist = true;	//标记该顶点仍存在
+				//flag_sample_point_used[i] = true;
+				break;
+			}
+		}
+
+		if (jud_still_exist == false) {	//如果该顶点不存在于当前块中
+			for (int k = 0; k < is_fragile_V_2.size(); k++)
+				is_fragile_V_2[k][i] = false;	//is_fragile_V_2中对应该顶点的信息全部置为false
+			sample_points_in_block.push_back(i);
+			for (int k = 0; k < map_S_and_vertex.size(); k++) {
+				if (map_S_and_vertex[k] == i)
+					S_in_block.push_back(k);	//将该顶点对应的不可达索引加入S_in_block
+			}
+			for (int k = 0; k < map_covering_points_and_vertex.size(); k++) {
+				if (map_covering_points_and_vertex[k] == i)
+					covering_points_in_block.push_back(k);	//将该顶点对应的被碰撞单元索引加入covering_points_in_block
+			}
+		}
+	}
+
+	/*while (pre_tree_nodes[now_last_node] != -1) {
+		for (int i = 0; i < final_pathes_include_S[now_last_node].size(); i++) {
+			S_in_block.push_back(final_pathes_include_S[now_last_node][i]);
+		}
+		for (int i = 0; i < final_pathes_include_sample_points[now_last_node].size(); i++) {
+			sample_points_in_block.push_back(final_pathes_include_sample_points[now_last_node][i]);
+		}
+		now_last_node = pre_tree_nodes[now_last_node];
+	}
+	now_last_node = last_step_nodes.front();*/
+
+	for (int i = 0; i < S_in_block.size(); i++)
+		judge_S_be_searched[S_in_block[i]] = true;
+
+	ori_num_points_of_ori_in_all_the_area_S.clear();
+	ori_num_points_of_ori_in_all_the_area_S.resize(ori_all_the_area_S.size());	//为每个不可达点在ori_num_points_of_ori_in_all_the_area_S分配一个向量
+	for (int i = 0; i < ori_all_the_area_S.size(); i++) {
+		ori_num_points_of_ori_in_all_the_area_S[i].resize(sampling_subtractive.sample_points.size());	//每个不可达点记录在各个采样方向上对应的点数
+		for (int j = 0; j < ori_num_points_of_ori_in_all_the_area_S[i].size(); j++)
+			ori_num_points_of_ori_in_all_the_area_S[i][j] = 0;
+	}
+	for (int i = 0; i < ori_all_the_area_S.size(); i++) {	//枚举每个不可达点
+		for (int itr = 0; itr < ori_all_the_area_S[i].size(); itr++) {	//枚举该不可达点对应的所有area_S
+			ori_num_points_of_ori_in_all_the_area_S[i][ori_all_the_area_S[i][itr].oriId]++;	//统计该不可达点在各个采样方向上对应的点数
+		}
+	}
+	for (int i = 0; i < sample_points_in_block.size(); i++) {  //枚举每个不存在于当前块中的顶点
+		for (int j = 0; j < all_the_covering_points[map_covering_points_and_vertex_inv[sample_points_in_block[i]]].size(); j++) {
+			int index = all_the_covering_points[map_covering_points_and_vertex_inv[sample_points_in_block[i]]][j].pointId;
+			int ori = all_the_covering_points[map_covering_points_and_vertex_inv[sample_points_in_block[i]]][j].oriId;
+			ori_num_points_of_ori_in_all_the_area_S[index][ori]--;	//更新该不可达点在该采样方向上对应的点数
+		}
+	}
+	for (int i = 0; i < covering_points_in_block.size(); i++)
+		judge_covering_points_be_searched[covering_points_in_block[i]] = true;	//标记需要更新的被碰撞单元
+
+	if (tree_nodes_judge_continue[now_last_node] == true) {
+		Katana::Instance().stl.loadStl((file_name + "-" + to_string(height_of_beam_search) + "_" + to_string(cont_number_of_queue) + "_" + to_string(tree_nodes_continue_id[now_last_node]) + "_subblock.stl").c_str());
+		Katana::Instance().temp_vertices.resize(Katana::Instance().vertices.size());
+		Katana::Instance().temp_vertices = Katana::Instance().vertices;
+	}
+	clock_t end_time_5 = clock();
+	return double(end_time_5 - start_time_5) / CLOCKS_PER_SEC;
 }
 
 void HybridManufacturing::DFS_search(Layer_Graph layer_graph, bool& flag_continue, bool previous_is_continue, vector<bool> judge_S_be_searched, vector<bool> judge_covering_points_be_searched, bool& jud_admit)
@@ -4582,10 +4674,10 @@ void HybridManufacturing::sort_candidate_nodes(vector<int>& candidate_nodes, vec
 	}*/
 }
 
-void HybridManufacturing::subtractive_remove_output(const vector<TRiangle>& need_detect_triangle, const Slicer_2& current_slicer, int height_of_beam_search)
+void HybridManufacturing::subtractive_remove_output(const vector<TRiangle>& need_detect_triangle, const Slicer_2& current_slicer, int height_of_beam_search, int cont_number_of_queue)
 {
-	std::string filename = ".\\vis\\block_patch-" + to_string(height_of_beam_search) + "_" + ".obj";
-	std::ofstream file(filename);
+	std::string filename = ".\\vis\\block_patch-" + to_string(height_of_beam_search) + "_" + to_string(cont_number_of_queue) + ".obj";
+	std::ofstream file(filename);	
 	if (!file)
 	{
 		std::cout << "subtractive_remove_output !file" << std::endl;

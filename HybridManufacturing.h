@@ -130,6 +130,20 @@ public:
 	using CutLayerVector = vector<vector<cv::Point3d>>;
 	using OrientationScores = vector<all_value>;
 
+	struct BeamTreeEntry {
+		CutLayerVector layers;
+		CutLayerVector contain;
+		vector<int> cut_layers;
+		vector<int> cut_layers_dependency_layer;
+		vector<Eigen::MatrixXd> fragile_v;
+		vector<vector<area_S>> ori_all_the_area_s;
+		vector<bool> judge_s_be_searched;
+		double larger_base = 0.0;
+		bool judge_continue = false;
+		int continue_id = -1;
+		bool error = false;
+	};
+
 	HybridManufacturing(std::string file_name, std::string suf, Eigen::MatrixXd V, Eigen::MatrixXi F, Eigen::MatrixXd Normals);
 	~HybridManufacturing();
 
@@ -176,7 +190,7 @@ public:
 		bool judge_continue_additive,
 		bool flag_is_continue_block,
 		int pre_cont_number_of_queue,
-		vector<bool>& jud_error,
+		bool & jud_error,
 		int id_node,
 		int id_continue,
 		vector<int> flag_cut_layers_is_hole);
@@ -223,6 +237,7 @@ public:
 		vector<vector<Eigen::Vector3d>> save_ori,
 		OrientationScores& pure_value,
 		int id_continue);
+	// 保留旧版重载：后续主版本将使用 tree_entries，此接口暂不移除。
 	void sort_candidate_nodes(vector<int>& candidate_nodes, vector<vector<int>> Tree_nodes_for_S);
 	void subtractive_remove_output(const vector<TRiangle>& need_detect_triangle, const Slicer_2& current_slicer, int height_of_beam_search, int cont_number_of_queue);
 
@@ -241,7 +256,7 @@ private:
 		int& now_last_node,
 		int height_of_beam_search,
 		int cont_number_of_queue,
-		const vector<bool>& tree_nodes_judge_continue,
+		const vector<BeamTreeEntry>& tree_entries,
 		const int* pre_index_of_nodes,
 		double& sum_time_5);
 
@@ -249,14 +264,8 @@ private:
 		int& i,
 		vector<int>& candidate_nodes,
 		OrientationScores& all_calculated_value,
-		vector<double>& tree_nodes_larger_base,
-		const vector<vector<int>>& tree_nodes_cut_layers,
-		const vector<CutLayerVector>& tree_nodes,
-		const vector<vector<int>>& tree_nodes_num_of_cut_layers_dependency_layer,
-		const vector<vector<Eigen::MatrixXd>>& tree_nodes_fragile_v,
+		vector<BeamTreeEntry>& tree_entries,
 		const vector<vector<Eigen::Vector3d>>& save_ori,
-		const vector<bool>& tree_nodes_judge_continue,
-		const vector<int>& tree_nodes_continue_id,
 		const int* pre_index_of_nodes,
 		int height_of_beam_search,
 		int cont_number_of_queue,
@@ -269,8 +278,7 @@ private:
 		const vector<int>& candidate_nodes,
 		int now_last_node,
 		const vector<vector<Eigen::Vector3d>>& save_ori,
-		const vector<vector<int>>& tree_nodes_cut_layers,
-		const vector<bool>& tree_nodes_judge_continue,
+		const vector<BeamTreeEntry>& tree_entries,
 		queue<int>& last_step_nodes,
 		const OrientationScores& all_calculated_value,
 		const OrientationScores& pure_value,
@@ -282,10 +290,7 @@ private:
 	void BuildCutLayersForCandidate(
 		int cont_w,
 		const vector<int>& candidate_nodes,
-		const vector<vector<int>>& tree_nodes_cut_layers,
-		const vector<CutLayerVector>& tree_nodes,
-		const vector<CutLayerVector>& tree_nodes_contain,
-		const vector<vector<int>>& tree_nodes_num_of_cut_layers_dependency_layer,
+		const vector<BeamTreeEntry>& tree_entries,
 		vector<vector<cv::Point3d>>& all_cut_layers,
 		vector<int>& all_cut_layers_dependency_layer,
 		vector<int>& flag_cut_layers_is_hole) const;
@@ -321,8 +326,7 @@ private:
 		int now_last_node,
 		int height_of_beam_search,
 		int cont_number_of_queue,
-		const vector<bool>& tree_nodes_judge_continue,
-		const vector<int>& tree_nodes_continue_id,
+		const vector<BeamTreeEntry>& tree_entries,
 		vector<bool>& judge_S_be_searched,
 		vector<bool>& judge_covering_points_be_searched);
 

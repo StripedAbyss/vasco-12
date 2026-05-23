@@ -261,6 +261,15 @@ private:
 		double& slicing_time,
 		double& graph_time);
 
+	bool ProcessOrientationSearch(
+		Layer_Graph& layer_graph,
+		const vector<bool>& judge_S_be_searched,
+		const vector<bool>& judge_covering_points_be_searched,
+		int& W1,
+		double& sum_time,
+		bool& flag_continue,
+		bool& jud_admit);
+
 	double UpdateSubtractiveDependencyGraph(
 		const vector<vector<area_S>>& ori_all_the_area_S,
 		vector<vector<bool>>& is_fragile_V_2,

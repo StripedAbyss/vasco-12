@@ -3428,27 +3428,19 @@ void HybridManufacturing::outer_beam_search(nozzle the_nozzle, cutter cutting_to
 			pathes_include_S.clear(); pathes_include_sample_points.clear(); paths_include_covering_points.clear();
 			//std::cout << "cc" << endl;
 
+
 			bool flag_continue = false;	//是否继续从当前节点向下搜索
-			bool previous_is_continue = false;	//记录上一个节点是否为continue节点
-			/*if (Tree_nodes_judge_continue[now_last_node] == true)
-				previous_is_continue = true;*/
-			bool jud_admit = true;	//记录当前方向是否可行
-
-			start_time_3 = clock();
-
-			if (open_change_orientation == true)
-				W1 = 1;
-			DFS_search(layer_graph, flag_continue, previous_is_continue, judge_S_be_searched, judge_covering_points_be_searched, jud_admit);	//对当前方向进行增材分层依赖图的深度优先搜索，生成这个分层方向的解
-
-			/*if (height_of_beam_search==1&& Tree_nodes_continue_id[now_last_node] >= 2)
-				flag_continue = false;*/
-
-			end_time_3 = clock();
-			if (jud_admit == false)
+			bool jud_admit = true;
+			if (!ProcessOrientationSearch(
+				layer_graph,
+				judge_S_be_searched,
+				judge_covering_points_be_searched,
+				W1,
+				sum_time,
+				flag_continue,
+				jud_admit)) {
 				continue;
-			sum_time += double(end_time_3 - start_time_3) / CLOCKS_PER_SEC;
-
-			//cout << "()()()(" << double(end_time_3 - start_time_3) / CLOCKS_PER_SEC << endl;
+			}
 
 			final_pathes_include_S.insert(final_pathes_include_S.end(), pathes_include_S.begin(), pathes_include_S.end());
 			final_pathes_include_sample_points.insert(final_pathes_include_sample_points.end(), pathes_include_sample_points.begin(), pathes_include_sample_points.end());
@@ -3986,6 +3978,34 @@ Layer_Graph HybridManufacturing::BuildAdditiveLayerGraph(
 	graph_time += double(end_time_4 - start_time_4) / CLOCKS_PER_SEC;
 
 	return layer_graph;
+}
+
+bool HybridManufacturing::ProcessOrientationSearch(
+	Layer_Graph& layer_graph,
+	const vector<bool>& judge_S_be_searched,
+	const vector<bool>& judge_covering_points_be_searched,
+	int& W1,
+	double& sum_time,
+	bool& flag_continue,
+	bool& jud_admit)
+{
+	bool previous_is_continue = false;	//记录上一个节点是否为continue节点
+	clock_t start_time_3 = clock();
+
+	if (open_change_orientation == true)
+		W1 = 1;
+	DFS_search(layer_graph, flag_continue, previous_is_continue, judge_S_be_searched, judge_covering_points_be_searched, jud_admit);	//对当前方向进行增材分层依赖图的深度优先搜索，生成这个分层方向的解
+
+	/*if (height_of_beam_search==1&& Tree_nodes_continue_id[now_last_node] >= 2)
+		flag_continue = false;*/
+
+	clock_t end_time_3 = clock();
+	if (jud_admit == false)
+		return false;
+	sum_time += double(end_time_3 - start_time_3) / CLOCKS_PER_SEC;
+
+	//cout << "()()()(" << double(end_time_3 - start_time_3) / CLOCKS_PER_SEC << endl;
+	return true;
 }
 
 void HybridManufacturing::DFS_search(Layer_Graph layer_graph, bool& flag_continue, bool previous_is_continue, vector<bool> judge_S_be_searched, vector<bool> judge_covering_points_be_searched, bool& jud_admit)

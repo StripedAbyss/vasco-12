@@ -3231,6 +3231,125 @@ vector<vector<int>> HybridManufacturing::getAccessOri(const Slicer_2& slicer, Sl
 	return accessible_ori_of_need_detect_V;
 }
 
+void HybridManufacturing::EvaluateCandidateNode(
+	int& i,
+	vector<int>& candidate_nodes,
+	OrientationScores& all_calculated_value,
+	vector<double>& tree_nodes_larger_base,
+	const vector<vector<int>>& tree_nodes_cut_layers,
+	const vector<CutLayerVector>& tree_nodes,
+	const vector<vector<int>>& tree_nodes_num_of_cut_layers_dependency_layer,
+	const vector<vector<Eigen::MatrixXd>>& tree_nodes_fragile_v,
+	const vector<vector<Eigen::Vector3d>>& save_ori,
+	const vector<bool>& tree_nodes_judge_continue,
+	const vector<int>& tree_nodes_continue_id,
+	const int* pre_index_of_nodes,
+	int height_of_beam_search,
+	int cont_number_of_queue,
+	const string& file_name,
+	int now_last_node,
+	nozzle the_nozzle)
+{
+	printf("\r[%d%%]>", i * 100 / (candidate_nodes.size() - 1));
+	for (int j = 1; j <= i * 20 / candidate_nodes.size(); j++)
+		cout << "▉";
+
+	int index_of_pre_node = pre_index_of_nodes[candidate_nodes[i]];
+	vector<vector<cv::Point3d>> all_cut_layers;
+	vector<int> all_cut_layers_dependency_layer;
+	all_cut_layers.clear();
+	all_cut_layers_dependency_layer.clear();
+	for (int j = 0; j < tree_nodes_cut_layers[candidate_nodes[i]].size(); j++) {
+		int index_of_layers = tree_nodes_cut_layers[candidate_nodes[i]][j];
+		all_cut_layers.push_back(tree_nodes[candidate_nodes[i]][index_of_layers]);
+		all_cut_layers_dependency_layer.push_back(tree_nodes_num_of_cut_layers_dependency_layer[candidate_nodes[i]][j]);
+	}
+
+	Slicer_2 slicer_G;
+	if (tree_nodes_judge_continue[now_last_node] == false)
+		slicer_G.load(file_name + "-" + to_string(height_of_beam_search - 1) + "_" + to_string(index_of_pre_node) + ".obj");
+	else
+		slicer_G.load(file_name + "-" + to_string(height_of_beam_search - 1) + "_" + to_string(index_of_pre_node) + "_" + to_string(tree_nodes_continue_id[candidate_nodes[i]] - 1) + "_subblock.obj");
+
+	all_calculated_value[i] = GainMesh(
+		slicer_G,
+		all_cut_layers,
+		save_ori[candidate_nodes[i]][0],
+		height_of_beam_search,
+		cont_number_of_queue,
+		index_of_pre_node,
+		all_cut_layers_dependency_layer,
+		tree_nodes_judge_continue[now_last_node],
+		tree_nodes_continue_id[candidate_nodes[i]]);
+
+	calculate_fragile_value(all_calculated_value[i], all_cut_layers, tree_nodes_fragile_v[candidate_nodes[i]]);
+
+	tree_nodes_larger_base.push_back(all_calculated_value[i].large_base);
+	if (all_calculated_value[i].value_of_self_support == 0) {
+		candidate_nodes.erase(candidate_nodes.begin() + i);
+		all_calculated_value.erase(all_calculated_value.begin() + i);
+		i--;
+		return;
+	}
+
+	detect_collision_with_printing_platform(
+		i,
+		candidate_nodes,
+		all_calculated_value,
+		all_cut_layers,
+		save_ori[candidate_nodes[i]][0],
+		the_nozzle);
+}
+
+void HybridManufacturing::LogSelectedCandidateMetrics(
+	int cont_w,
+	const vector<int>& candidate_nodes,
+	int now_last_node,
+	const vector<vector<Eigen::Vector3d>>& save_ori,
+	const vector<vector<int>>& tree_nodes_cut_layers,
+	const vector<bool>& tree_nodes_judge_continue,
+	queue<int>& last_step_nodes,
+	const OrientationScores& all_calculated_value,
+	const OrientationScores& pure_value,
+	int& sum_candidate_blocks,
+	int& sum_connected_components,
+	int& cont_extra_additive_orientation,
+	vector<double>& evaluation_value)
+{
+	cout << endl << "selected orientation: " << save_ori[candidate_nodes[cont_w]][0].x() << " " << save_ori[candidate_nodes[cont_w]][0].y() << " " << save_ori[candidate_nodes[cont_w]][0].z();
+	cout << endl << "number of candidate_nodes: " << candidate_nodes.size() << endl;
+	sum_candidate_blocks += candidate_nodes.size();
+	sum_connected_components += tree_nodes_cut_layers[candidate_nodes[cont_w]].size();
+	if (tree_nodes_judge_continue[now_last_node] == false)
+		last_step_nodes.push(candidate_nodes[cont_w]);
+	cout << "self support value of selected node: " << all_calculated_value[cont_w].value_of_self_support << endl << "■■■■■■■■■■■■■■■■■■■" << endl;
+	cout << "value_of_more_slice_layers: " << all_calculated_value[cont_w].value_of_more_slice_layers << endl;
+	cout << "value_of_area_S: " << all_calculated_value[cont_w].value_of_area_S << endl;
+	cout << "value_of_covering_points: " << all_calculated_value[cont_w].value_of_covering_points << endl;
+	cout << "value_of_less_clipping_plane: " << all_calculated_value[cont_w].value_of_less_clipping_plane << endl;
+	cout << "value_of_fragile: " << all_calculated_value[cont_w].value_of_fragile << endl;
+	cout << "value_of_orientation: " << all_calculated_value[cont_w].value_of_orientation << endl;
+	cout << "value_of_projected: " << all_calculated_value[cont_w].value_of_projected << endl;
+	cout << "■■■■■■■■■■■■■■■■■■■" << endl;
+
+	cout << "^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^" << endl;
+	cout << "Pure value orien:" << pure_value[cont_w].value_of_orientation << endl;
+	cout << "Pure value fragile:" << pure_value[cont_w].value_of_fragile << endl;
+	cout << "Pure value projection:" << pure_value[cont_w].value_of_projected << endl;
+	cout << "^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^" << endl;
+	if (tree_nodes_judge_continue[candidate_nodes[cont_w]] == true) {
+		cout << "*****NEED CHANGE ORIENTATION*****" << endl;
+		cont_extra_additive_orientation++;
+	}
+
+	evaluation_value[0] += all_calculated_value[cont_w].value_of_more_slice_layers;
+	evaluation_value[1] += all_calculated_value[cont_w].value_of_covering_points;
+	evaluation_value[2] += all_calculated_value[cont_w].value_of_less_clipping_plane;
+	evaluation_value[3] += all_calculated_value[cont_w].value_of_orientation;
+	evaluation_value[4] += all_calculated_value[cont_w].value_of_fragile;
+	evaluation_value[5] += all_calculated_value[cont_w].value_of_projected;
+}
+
 void HybridManufacturing::PrepareOuterBeamSearchNode(
 	queue<int>& last_step_nodes,
 	vector<vector<bool>>& is_fragile_V_2,
@@ -3486,47 +3605,25 @@ void HybridManufacturing::outer_beam_search(nozzle the_nozzle, cutter cutting_to
 			vector<all_value> pure_value;
 			all_calculated_value.resize(candidate_nodes.size());
 			pure_value.resize(candidate_nodes.size());
-			for (int i = 0; i < candidate_nodes.size(); i++) {
-				printf("\r[%d%%]>", i * 100 / (candidate_nodes.size() - 1));
-				for (int j = 1; j <= i * 20 / candidate_nodes.size(); j++)
-					cout << "▉";
-				int index_of_pre_node = pre_index_of_nodes[candidate_nodes[i]];
-				vector<vector<cv::Point3d>> all_cut_layers;
-				vector<int> all_cut_layers_dependency_layer;
-				all_cut_layers.clear(); all_cut_layers_dependency_layer.clear();
-				for (int j = 0; j < Tree_nodes_cut_layers[candidate_nodes[i]].size(); j++) {
-					int index_of_layers = Tree_nodes_cut_layers[candidate_nodes[i]][j];
-					all_cut_layers.push_back(Tree_nodes[candidate_nodes[i]][index_of_layers]);
-					all_cut_layers_dependency_layer.push_back(Tree_nodes_num_of_cut_layers_dependency_layer[candidate_nodes[i]][j]);
-				}
-				//clock_t start_time_8, end_time_8;
-
-				Slicer_2 slicer_G;
-				if (Tree_nodes_judge_continue[now_last_node] == false)
-					slicer_G.load(file_name + "-" + to_string(height_of_beam_search - 1) + "_" + to_string(index_of_pre_node) + ".obj");
-				else
-					slicer_G.load(file_name + "-" + to_string(height_of_beam_search - 1) + "_" + to_string(index_of_pre_node) + "_" + to_string(Tree_nodes_continue_id[candidate_nodes[i]] - 1) + "_subblock.obj");
-				//start_time_8 = clock();
-				all_calculated_value[i] = GainMesh(slicer_G, all_cut_layers, save_ori[candidate_nodes[i]][0], height_of_beam_search, cont_number_of_queue, index_of_pre_node, all_cut_layers_dependency_layer, Tree_nodes_judge_continue[now_last_node], Tree_nodes_continue_id[candidate_nodes[i]]);
-				//end_time_8 = clock();
-				//cout << "()()()(" << double(end_time_8 - start_time_8) / CLOCKS_PER_SEC << endl;
-				//cout << endl <<candidate_nodes.size();
-
-				calculate_fragile_value(all_calculated_value[i], all_cut_layers, Tree_nodes_fragile_V[candidate_nodes[i]]);
-
-				Tree_nodes_larger_base.push_back(all_calculated_value[i].large_base);
-				if (all_calculated_value[i].value_of_self_support == 0) {
-					//cout << "is not self-support!" << endl;
-					candidate_nodes.erase(candidate_nodes.begin() + i);
-					all_calculated_value.erase(all_calculated_value.begin() + i);
-					i--;
-					continue;
-				}
-
-				//if(height_of_beam_search <=6)
-					//cout << i << endl;
-
-				detect_collision_with_printing_platform(i, candidate_nodes, all_calculated_value, all_cut_layers, save_ori[candidate_nodes[i]][0], the_nozzle);
+			for (int i = 0; i < static_cast<int>(candidate_nodes.size()); i++) {
+				EvaluateCandidateNode(
+					i,
+					candidate_nodes,
+					all_calculated_value,
+					Tree_nodes_larger_base,
+					Tree_nodes_cut_layers,
+					Tree_nodes,
+					Tree_nodes_num_of_cut_layers_dependency_layer,
+					Tree_nodes_fragile_V,
+					save_ori,
+					Tree_nodes_judge_continue,
+					Tree_nodes_continue_id,
+					pre_index_of_nodes,
+					height_of_beam_search,
+					cont_number_of_queue,
+					file_name,
+					now_last_node,
+					the_nozzle);
 			}
 
 			sort_candidate_nodes(candidate_nodes, Tree_nodes, final_pathes_include_S, all_calculated_value, Tree_nodes_cut_layers, pre_tree_nodes, Tree_nodes_larger_base, final_pathes_include_covering_points, height_of_beam_search, save_ori, pure_value, Tree_nodes_continue_id[candidate_nodes[0]]);
@@ -3552,38 +3649,20 @@ void HybridManufacturing::outer_beam_search(nozzle the_nozzle, cutter cutting_to
 			//		cout << save_ori[candidate_nodes[i]][0].x() << " " << save_ori[candidate_nodes[i]][0].y() << " " << save_ori[candidate_nodes[i]][0].z() << " " << endl;
 			start_time_7 = clock();
 			while (candidate_nodes.size() != 0 && cont_w < W1 && cont_w < candidate_nodes.size()) {
-				cout << endl << "selected orientation: " << save_ori[candidate_nodes[cont_w]][0].x() << " " << save_ori[candidate_nodes[cont_w]][0].y() << " " << save_ori[candidate_nodes[cont_w]][0].z();
-				cout << endl << "number of candidate_nodes: " << candidate_nodes.size() << endl;
-				Sum_candidate_blocks += candidate_nodes.size();
-				Sum_connected_components += Tree_nodes_cut_layers[candidate_nodes[cont_w]].size();
-				if (Tree_nodes_judge_continue[now_last_node] == false)
-					last_step_nodes.push(candidate_nodes[cont_w]);
-				cout << "self support value of selected node: " << all_calculated_value[cont_w].value_of_self_support << endl << "■■■■■■■■■■■■■■■■■■■" << endl;
-				cout << "value_of_more_slice_layers: " << all_calculated_value[cont_w].value_of_more_slice_layers << endl;
-				cout << "value_of_area_S: " << all_calculated_value[cont_w].value_of_area_S << endl;
-				cout << "value_of_covering_points: " << all_calculated_value[cont_w].value_of_covering_points << endl;
-				cout << "value_of_less_clipping_plane: " << all_calculated_value[cont_w].value_of_less_clipping_plane << endl;
-				cout << "value_of_fragile: " << all_calculated_value[cont_w].value_of_fragile << endl;
-				cout << "value_of_orientation: " << all_calculated_value[cont_w].value_of_orientation << endl;
-				cout << "value_of_projected: " << all_calculated_value[cont_w].value_of_projected << endl;
-				cout << "■■■■■■■■■■■■■■■■■■■" << endl;
-
-				cout << "^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^" << endl;
-				cout << "Pure value orien:" << pure_value[cont_w].value_of_orientation << endl;
-				cout << "Pure value fragile:" << pure_value[cont_w].value_of_fragile << endl;
-				cout << "Pure value projection:" << pure_value[cont_w].value_of_projected << endl;
-				cout << "^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^" << endl;
-				if (Tree_nodes_judge_continue[candidate_nodes[cont_w]] == true) {
-					cout << "*****NEED CHANGE ORIENTATION*****" << endl;
-					cont_extra_additive_orientation++;
-				}
-
-				evaluation_value[0] += all_calculated_value[cont_w].value_of_more_slice_layers;
-				evaluation_value[1] += all_calculated_value[cont_w].value_of_covering_points;
-				evaluation_value[2] += all_calculated_value[cont_w].value_of_less_clipping_plane;
-				evaluation_value[3] += all_calculated_value[cont_w].value_of_orientation;
-				evaluation_value[4] += all_calculated_value[cont_w].value_of_fragile;
-				evaluation_value[5] += all_calculated_value[cont_w].value_of_projected;
+				LogSelectedCandidateMetrics(
+					cont_w,
+					candidate_nodes,
+					now_last_node,
+					save_ori,
+					Tree_nodes_cut_layers,
+					Tree_nodes_judge_continue,
+					last_step_nodes,
+					all_calculated_value,
+					pure_value,
+					Sum_candidate_blocks,
+					Sum_connected_components,
+					cont_extra_additive_orientation,
+					evaluation_value);
 				//decompose the model for every node//
 				int index_of_pre_node = pre_index_of_nodes[candidate_nodes[cont_w]];
 				vector<vector<cv::Point3d>> all_cut_layers;

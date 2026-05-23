@@ -245,6 +245,40 @@ private:
 		const int* pre_index_of_nodes,
 		double& sum_time_5);
 
+	void EvaluateCandidateNode(
+		int& i,
+		vector<int>& candidate_nodes,
+		OrientationScores& all_calculated_value,
+		vector<double>& tree_nodes_larger_base,
+		const vector<vector<int>>& tree_nodes_cut_layers,
+		const vector<CutLayerVector>& tree_nodes,
+		const vector<vector<int>>& tree_nodes_num_of_cut_layers_dependency_layer,
+		const vector<vector<Eigen::MatrixXd>>& tree_nodes_fragile_v,
+		const vector<vector<Eigen::Vector3d>>& save_ori,
+		const vector<bool>& tree_nodes_judge_continue,
+		const vector<int>& tree_nodes_continue_id,
+		const int* pre_index_of_nodes,
+		int height_of_beam_search,
+		int cont_number_of_queue,
+		const string& file_name,
+		int now_last_node,
+		nozzle the_nozzle);
+
+	void LogSelectedCandidateMetrics(
+		int cont_w,
+		const vector<int>& candidate_nodes,
+		int now_last_node,
+		const vector<vector<Eigen::Vector3d>>& save_ori,
+		const vector<vector<int>>& tree_nodes_cut_layers,
+		const vector<bool>& tree_nodes_judge_continue,
+		queue<int>& last_step_nodes,
+		const OrientationScores& all_calculated_value,
+		const OrientationScores& pure_value,
+		int& sum_candidate_blocks,
+		int& sum_connected_components,
+		int& cont_extra_additive_orientation,
+		vector<double>& evaluation_value);
+
 	bool PrepareOrientationSliceData(
 		const SAMPLE_ON_BALL& sampling,
 		int ori,

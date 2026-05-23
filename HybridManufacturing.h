@@ -279,6 +279,17 @@ private:
 		int& cont_extra_additive_orientation,
 		vector<double>& evaluation_value);
 
+	void BuildCutLayersForCandidate(
+		int cont_w,
+		const vector<int>& candidate_nodes,
+		const vector<vector<int>>& tree_nodes_cut_layers,
+		const vector<CutLayerVector>& tree_nodes,
+		const vector<CutLayerVector>& tree_nodes_contain,
+		const vector<vector<int>>& tree_nodes_num_of_cut_layers_dependency_layer,
+		vector<vector<cv::Point3d>>& all_cut_layers,
+		vector<int>& all_cut_layers_dependency_layer,
+		vector<int>& flag_cut_layers_is_hole) const;
+
 	bool PrepareOrientationSliceData(
 		const SAMPLE_ON_BALL& sampling,
 		int ori,

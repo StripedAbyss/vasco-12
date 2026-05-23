@@ -3350,6 +3350,33 @@ void HybridManufacturing::LogSelectedCandidateMetrics(
 	evaluation_value[5] += all_calculated_value[cont_w].value_of_projected;
 }
 
+void HybridManufacturing::BuildCutLayersForCandidate(
+	int cont_w,
+	const vector<int>& candidate_nodes,
+	const vector<vector<int>>& tree_nodes_cut_layers,
+	const vector<CutLayerVector>& tree_nodes,
+	const vector<CutLayerVector>& tree_nodes_contain,
+	const vector<vector<int>>& tree_nodes_num_of_cut_layers_dependency_layer,
+	vector<vector<cv::Point3d>>& all_cut_layers,
+	vector<int>& all_cut_layers_dependency_layer,
+	vector<int>& flag_cut_layers_is_hole) const
+{
+	all_cut_layers.clear();
+	all_cut_layers_dependency_layer.clear();
+	flag_cut_layers_is_hole.clear();
+	for (int j = 0; j < tree_nodes_cut_layers[candidate_nodes[cont_w]].size(); j++) {
+		int index_of_layers = tree_nodes_cut_layers[candidate_nodes[cont_w]][j];
+		all_cut_layers.push_back(tree_nodes[candidate_nodes[cont_w]][index_of_layers]);
+		flag_cut_layers_is_hole.push_back(-1);
+		if (tree_nodes_contain[candidate_nodes[cont_w]][index_of_layers].size() != 0) {
+			all_cut_layers.push_back(tree_nodes_contain[candidate_nodes[cont_w]][index_of_layers]);
+			all_cut_layers_dependency_layer.push_back(tree_nodes_num_of_cut_layers_dependency_layer[candidate_nodes[cont_w]][j]);
+			flag_cut_layers_is_hole.push_back(all_cut_layers.size() - 2);
+		}
+		all_cut_layers_dependency_layer.push_back(tree_nodes_num_of_cut_layers_dependency_layer[candidate_nodes[cont_w]][j]);
+	}
+}
+
 void HybridManufacturing::PrepareOuterBeamSearchNode(
 	queue<int>& last_step_nodes,
 	vector<vector<bool>>& is_fragile_V_2,
@@ -3668,19 +3695,16 @@ void HybridManufacturing::outer_beam_search(nozzle the_nozzle, cutter cutting_to
 				vector<vector<cv::Point3d>> all_cut_layers;
 				vector<int> flag_cut_layers_is_hole;
 				vector<int> all_cut_layers_dependency_layer;
-				all_cut_layers.clear(); all_cut_layers_dependency_layer.clear();
-				flag_cut_layers_is_hole.clear();
-				for (int j = 0; j < Tree_nodes_cut_layers[candidate_nodes[cont_w]].size(); j++) {
-					int index_of_layers = Tree_nodes_cut_layers[candidate_nodes[cont_w]][j];
-					all_cut_layers.push_back(Tree_nodes[candidate_nodes[cont_w]][index_of_layers]);
-					flag_cut_layers_is_hole.push_back(-1);
-					if (Tree_nodes_contain[candidate_nodes[cont_w]][index_of_layers].size() != 0) {
-						all_cut_layers.push_back(Tree_nodes_contain[candidate_nodes[cont_w]][index_of_layers]);
-						all_cut_layers_dependency_layer.push_back(Tree_nodes_num_of_cut_layers_dependency_layer[candidate_nodes[cont_w]][j]);
-						flag_cut_layers_is_hole.push_back(all_cut_layers.size() - 2);
-					}
-					all_cut_layers_dependency_layer.push_back(Tree_nodes_num_of_cut_layers_dependency_layer[candidate_nodes[cont_w]][j]);
-				}
+				BuildCutLayersForCandidate(
+					cont_w,
+					candidate_nodes,
+					Tree_nodes_cut_layers,
+					Tree_nodes,
+					Tree_nodes_contain,
+					Tree_nodes_num_of_cut_layers_dependency_layer,
+					all_cut_layers,
+					all_cut_layers_dependency_layer,
+					flag_cut_layers_is_hole);
 
 				cout << "***** number_of_S: " << final_pathes_include_S[candidate_nodes[cont_w]].size() << endl;
 				cout << "***** all_cut_layers.size(): " << all_cut_layers.size() << endl;

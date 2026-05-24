@@ -3237,7 +3237,6 @@ void HybridManufacturing::EvaluateCandidateNode(
 	OrientationScores& all_calculated_value,
 	vector<BeamTreeEntry>& tree_entries,
 	const vector<vector<Eigen::Vector3d>>& save_ori,
-	const int* pre_index_of_nodes,
 	int height_of_beam_search,
 	int cont_number_of_queue,
 	const string& file_name,
@@ -3248,7 +3247,7 @@ void HybridManufacturing::EvaluateCandidateNode(
 	for (int j = 1; j <= i * 20 / candidate_nodes.size(); j++)
 		cout << "▉";
 
-	int index_of_pre_node = pre_index_of_nodes[candidate_nodes[i]];
+	int index_of_pre_node = tree_entries[candidate_nodes[i]].pre_queue_index;
 	vector<vector<cv::Point3d>> all_cut_layers;
 	vector<int> all_cut_layers_dependency_layer;
 	all_cut_layers.clear();
@@ -3374,7 +3373,6 @@ void HybridManufacturing::PrepareOuterBeamSearchNode(
 	int height_of_beam_search,
 	int cont_number_of_queue,
 	const vector<BeamTreeEntry>& tree_entries,
-	const int* pre_index_of_nodes,
 	double& sum_time_5)
 {
 	clock_t start_time_2 = clock();
@@ -3394,7 +3392,7 @@ void HybridManufacturing::PrepareOuterBeamSearchNode(
 		cout << "T" << endl;
 	}
 	else {
-		Katana::Instance().stl.loadStl((file_name + "-" + to_string(height_of_beam_search - 1) + "_" + to_string(pre_index_of_nodes[now_last_node]) + ".stl").c_str());
+		Katana::Instance().stl.loadStl((file_name + "-" + to_string(height_of_beam_search - 1) + "_" + to_string(tree_entries[now_last_node].pre_queue_index) + ".stl").c_str());
 		cout << "U" << now_last_node << endl;
 	}
 	Katana::Instance().temp_vertices.resize(Katana::Instance().vertices.size());	//更新当前模型的顶点信息
@@ -3430,12 +3428,9 @@ void HybridManufacturing::outer_beam_search(nozzle the_nozzle, cutter cutting_to
 	start_time_total = clock();
 	bool jud_outer_beam_search_terminate = false;
 	vector<BeamTreeEntry> tree_entries;
-	int* pre_tree_nodes = new int[500000];
-	int* pre_index_of_nodes = new int[500000];
 	vector<int> candidate_nodes;	//当前层生成的候选节点
 	queue<int> last_step_nodes;
 	vector<vector<Eigen::Vector3d>> save_ori;
-	memset(pre_tree_nodes, -1, sizeof(pre_tree_nodes));
 	vector<vector<cv::Point3d>> root_node;
 	vector<int> root_node_2;
 	double root_node_3;
@@ -3454,6 +3449,8 @@ void HybridManufacturing::outer_beam_search(nozzle the_nozzle, cutter cutting_to
 	root_entry.larger_base = root_node_3;
 	root_entry.ori_all_the_area_s = root_node_5;
 	root_entry.judge_s_be_searched = root_node_6;
+	root_entry.parent_id = -1;
+	root_entry.pre_queue_index = -1;
 	tree_entries.push_back(root_entry);
 	last_step_nodes.push(0);	//推入根节点，作为第一层搜索的初始节点
 	tree_entries[0].judge_continue = false;
@@ -3503,7 +3500,6 @@ void HybridManufacturing::outer_beam_search(nozzle the_nozzle, cutter cutting_to
 			height_of_beam_search,
 			cont_number_of_queue,
 			tree_entries,
-			pre_index_of_nodes,
 			sum_time_5);
 		//////////////
 
@@ -3581,8 +3577,8 @@ void HybridManufacturing::outer_beam_search(nozzle the_nozzle, cutter cutting_to
 				entry.cut_layers = all_cut_layers[i];
 				entry.cut_layers_dependency_layer = all_cut_layers_dependency_layer[i];
 				entry.fragile_v = fragile_V;
-				pre_tree_nodes[index_node] = now_last_node;
-				pre_index_of_nodes[index_node] = cont_number_of_queue;
+				entry.parent_id = now_last_node;
+				entry.pre_queue_index = cont_number_of_queue;
 				candidate_nodes.push_back(index_node);
 				vector<Eigen::Vector3d> temp_vec;
 				temp_vec.push_back(vectorAfter);
@@ -3620,7 +3616,6 @@ void HybridManufacturing::outer_beam_search(nozzle the_nozzle, cutter cutting_to
 					all_calculated_value,
 					tree_entries,
 					save_ori,
-					pre_index_of_nodes,
 					height_of_beam_search,
 					cont_number_of_queue,
 					file_name,
@@ -3628,18 +3623,7 @@ void HybridManufacturing::outer_beam_search(nozzle the_nozzle, cutter cutting_to
 					the_nozzle);
 			}
 
-			vector<vector<vector<cv::Point3d>>> tree_nodes;
-			vector<vector<int>> tree_nodes_cut_layers;
-			vector<double> tree_nodes_larger_base;
-			tree_nodes.reserve(tree_entries.size());
-			tree_nodes_cut_layers.reserve(tree_entries.size());
-			tree_nodes_larger_base.reserve(tree_entries.size());
-			for (const auto& entry : tree_entries) {
-				tree_nodes.push_back(entry.layers);
-				tree_nodes_cut_layers.push_back(entry.cut_layers);
-				tree_nodes_larger_base.push_back(entry.larger_base);
-			}
-			sort_candidate_nodes(candidate_nodes, tree_nodes, final_pathes_include_S, all_calculated_value, tree_nodes_cut_layers, pre_tree_nodes, tree_nodes_larger_base, final_pathes_include_covering_points, height_of_beam_search, save_ori, pure_value, tree_entries[candidate_nodes[0]].continue_id);
+			sort_candidate_nodes(candidate_nodes, tree_entries, final_pathes_include_S, all_calculated_value, final_pathes_include_covering_points, height_of_beam_search, save_ori, pure_value, tree_entries[candidate_nodes[0]].continue_id);
 			end_time = clock();
 
 			ofile_cont << final_pathes_include_S[candidate_nodes[0]].size() << endl;
@@ -3676,7 +3660,7 @@ void HybridManufacturing::outer_beam_search(nozzle the_nozzle, cutter cutting_to
 					cont_extra_additive_orientation,
 					evaluation_value);
 				//decompose the model for every node//
-				int index_of_pre_node = pre_index_of_nodes[candidate_nodes[cont_w]];
+				int index_of_pre_node = tree_entries[candidate_nodes[cont_w]].pre_queue_index;
 				vector<vector<cv::Point3d>> all_cut_layers;
 				vector<int> flag_cut_layers_is_hole;
 				vector<int> all_cut_layers_dependency_layer;
@@ -3707,7 +3691,7 @@ void HybridManufacturing::outer_beam_search(nozzle the_nozzle, cutter cutting_to
 					current_remove_triangles,
 					current_slicer,
 					tree_entries[candidate_nodes[cont_w]].judge_continue, tree_entries[now_last_node].judge_continue,
-					pre_index_of_nodes[now_last_node],
+					tree_entries[now_last_node].pre_queue_index,
 					tree_entries[candidate_nodes[cont_w]].error,
 					candidate_nodes[cont_w],
 					tree_entries[candidate_nodes[cont_w]].continue_id,
@@ -4452,7 +4436,16 @@ void HybridManufacturing::DFS_search(Layer_Graph layer_graph, bool& flag_continu
 	//////////////////////////////////////////////////////////////////////////////////
 }
 
-void HybridManufacturing::sort_candidate_nodes(vector<int>& candidate_nodes, vector<vector<vector<cv::Point3d>>> Tree_nodes, vector<vector<int>> final_pathes_include_S, vector<all_value>& all_calculated_value, vector<vector<int>> Tree_nodes_cut_layers, int pre_tree_nodes[], vector<double> Tree_nodes_larger_base, vector<vector<int>> final_pathes_include_covering_points, int height_of_beam_search, vector<vector<Eigen::Vector3d>> save_ori, vector<all_value>& pure_value, int id_continue)
+void HybridManufacturing::sort_candidate_nodes(
+	vector<int>& candidate_nodes,
+	const vector<BeamTreeEntry>& tree_entries,
+	vector<vector<int>> final_pathes_include_S,
+	OrientationScores& all_calculated_value,
+	vector<vector<int>> final_pathes_include_covering_points,
+	int height_of_beam_search,
+	vector<vector<Eigen::Vector3d>> save_ori,
+	OrientationScores& pure_value,
+	int id_continue)
 {
 	double W_less_area_S = 0, W_more_slice_layers = 0.6, W_covering_points = 0.4, W_less_clipping_plane = 0, W_fragile = 0, W_larger_base = 0, W_orientation = 0, W_projected = 0;
 
@@ -4503,11 +4496,10 @@ void HybridManufacturing::sort_candidate_nodes(vector<int>& candidate_nodes, vec
 			max_area_S = max(max_area_S, int(final_pathes_include_S[candidate_nodes[i]].size()));
 			min_area_S = min(min_area_S, int(final_pathes_include_S[candidate_nodes[i]].size()));
 
-			max_slice_layers = max(max_slice_layers, int(Tree_nodes[candidate_nodes[i]].size()));
-			min_slice_layers = min(min_slice_layers, int(Tree_nodes[candidate_nodes[i]].size()));
+			max_slice_layers = max(max_slice_layers, int(tree_entries[candidate_nodes[i]].layers.size()));
+			min_slice_layers = min(min_slice_layers, int(tree_entries[candidate_nodes[i]].layers.size()));
 
-			max_clipping_plane = max(max_clipping_plane, int(Tree_nodes_cut_layers[candidate_nodes[i]].si
-			ze()));
+			max_clipping_plane = max(max_clipping_plane, int(tree_entries[candidate_nodes[i]].cut_layers.size()));
 		}
 
 
@@ -4523,12 +4515,12 @@ void HybridManufacturing::sort_candidate_nodes(vector<int>& candidate_nodes, vec
 				all_calculated_value[i].value_of_area_S = 0;
 
 			if (max_slice_layers - min_slice_layers != 0)
-				all_calculated_value[i].value_of_more_slice_layers = double(Tree_nodes[candidate_nodes[i]].size() - min_slice_layers) / double(max_slice_layers - min_slice_layers);
+			all_calculated_value[i].value_of_more_slice_layers = double(tree_entries[candidate_nodes[i]].layers.size() - min_slice_layers) / double(max_slice_layers - min_slice_layers);
 			else
 				all_calculated_value[i].value_of_more_slice_layers = 0;
 
 			if (max_clipping_plane - min_clipping_plane != 0)
-				all_calculated_value[i].value_of_less_clipping_plane = 1 - double(Tree_nodes_cut_layers[candidate_nodes[i]].size() - min_clipping_plane) / double(max_clipping_plane - min_clipping_plane);
+			all_calculated_value[i].value_of_less_clipping_plane = 1 - double(tree_entries[candidate_nodes[i]].cut_layers.size() - min_clipping_plane) / double(max_clipping_plane - min_clipping_plane);
 			else
 				all_calculated_value[i].value_of_less_clipping_plane = 0;
 		}*/
@@ -4555,29 +4547,34 @@ void HybridManufacturing::sort_candidate_nodes(vector<int>& candidate_nodes, vec
 		//cout << "((((((" << sum_fragile[i] << endl;
 		sum_projected[i] = all_calculated_value[i].value_of_projected;
 		int index_node = candidate_nodes[i];
-		pure_value[i].value_of_orientation = save_ori[index_node][0].dot(save_ori[pre_tree_nodes[index_node]][0]);
+		const int parent_id = tree_entries[index_node].parent_id;
+		if (parent_id >= 0) {
+			pure_value[i].value_of_orientation = save_ori[index_node][0].dot(save_ori[parent_id][0]);
+		}
+		else {
+			pure_value[i].value_of_orientation = 0;
+		}
 		pure_value[i].value_of_fragile = all_calculated_value[i].value_of_fragile;
 		pure_value[i].value_of_projected = all_calculated_value[i].value_of_projected;
-		while (pre_tree_nodes[index_node] != -1) {
+		while (tree_entries[index_node].parent_id != -1) {
 			sum_area_S[i] += int(final_pathes_include_S[index_node].size());
-			double temp_sum = 0;
-			for (int j = 0; j < Tree_nodes[index_node].size(); j++) {
-				for (int k = 0; k < Tree_nodes[index_node][j].size() - 1; k++) {
-					sum_slice_layers[i] += distance3d(Tree_nodes[index_node][j][k], Tree_nodes[index_node][j][k + 1]);
+			for (int j = 0; j < tree_entries[index_node].layers.size(); j++) {
+				for (int k = 0; k < tree_entries[index_node].layers[j].size() - 1; k++) {
+					sum_slice_layers[i] += distance3d(tree_entries[index_node].layers[j][k], tree_entries[index_node].layers[j][k + 1]);
 				}
 			}
-			sum_clipping_plane[i] += int(Tree_nodes_cut_layers[index_node].size());
-			sum_larger_base[i] += Tree_nodes_larger_base[index_node];
+			sum_clipping_plane[i] += int(tree_entries[index_node].cut_layers.size());
+			sum_larger_base[i] += tree_entries[index_node].larger_base;
 
 			//sum_covering_points[i] += int(final_pathes_include_covering_points[index_node].size());
 			for (int j = 0; j < final_pathes_include_covering_points[index_node].size(); j++)
 				sum_covering_points[i] += int(all_the_covering_points[final_pathes_include_covering_points[index_node][j]].size());
-			index_node = pre_tree_nodes[index_node];
+			index_node = tree_entries[index_node].parent_id;
 		}
 		index_node = candidate_nodes[i];
-		while (pre_tree_nodes[index_node] != 0) {
-			sum_orientation[i] += save_ori[index_node][0].dot(save_ori[pre_tree_nodes[index_node]][0]);
-			index_node = pre_tree_nodes[index_node];
+		while (tree_entries[index_node].parent_id > 0) {
+			sum_orientation[i] += save_ori[index_node][0].dot(save_ori[tree_entries[index_node].parent_id][0]);
+			index_node = tree_entries[index_node].parent_id;
 		}
 	}
 	////////////////////////////////////

@@ -141,6 +141,8 @@ public:
 		double larger_base = 0.0;
 		bool judge_continue = false;
 		int continue_id = -1;
+		int parent_id = -1;
+		int pre_queue_index = -1;
 		bool error = false;
 	};
 
@@ -226,12 +228,9 @@ public:
 	//vector<vector<vector<cv::Point3d>>> DFS_search(Layer_Graph layer_graph, vector<vector<int>>& final_pathes_include_S, vector<vector<int>>& final_pathes_include_sample_points, vector<bool> judge_S_be_searched, vector<vector<int>>& all_cut_layers, vector<vector<int>>& all_cut_layers_dependency_layer, vector<vector<int>>& final_paths_include_covering_points, vector<bool> judge_covering_points_be_searched, vector<vector<area_S>> ori_all_the_covering_points);
 	void sort_candidate_nodes(
 		vector<int>& candidate_nodes,
-		vector<vector<vector<cv::Point3d>>> Tree_nodes,
+		const vector<BeamTreeEntry>& tree_entries,
 		vector<vector<int>> final_pathes_include_S,
 		OrientationScores& all_calculated_value,
-		vector<vector<int>> Tree_nodes_cut_layers,
-		int pre_tree_nodes[],
-		vector<double> Tree_nodes_larger_base,
 		vector<vector<int>> final_pathes_include_covering_points,
 		int height_of_beam_search,
 		vector<vector<Eigen::Vector3d>> save_ori,
@@ -257,7 +256,6 @@ private:
 		int height_of_beam_search,
 		int cont_number_of_queue,
 		const vector<BeamTreeEntry>& tree_entries,
-		const int* pre_index_of_nodes,
 		double& sum_time_5);
 
 	void EvaluateCandidateNode(
@@ -266,7 +264,6 @@ private:
 		OrientationScores& all_calculated_value,
 		vector<BeamTreeEntry>& tree_entries,
 		const vector<vector<Eigen::Vector3d>>& save_ori,
-		const int* pre_index_of_nodes,
 		int height_of_beam_search,
 		int cont_number_of_queue,
 		const string& file_name,

@@ -105,9 +105,10 @@ void GCodeWriter::write(vector<vector<vector<Vertex>>>& all_slice_points, vector
 
     for (unsigned int i = 0; i < Katana::Instance().layers.size(); i++)
     {
-        vector<vector<Vertex>> temp;
-        all_slice_points.push_back(temp);
-        all_slice_points_contain.push_back(temp);
+        all_slice_points.emplace_back();
+        all_slice_points_contain.emplace_back();
+        auto& layer_points = all_slice_points.back();
+        auto& layer_points_contain = all_slice_points_contain.back();
         Layer& l = Katana::Instance().layers[i];
 
         float feedrate = (i == 0) ? 500.f : 1200.f;
@@ -125,8 +126,14 @@ void GCodeWriter::write(vector<vector<vector<Vertex>>>& all_slice_points, vector
             //assert(v0.z==l.z);
             //assert(v1.z==l.z);
             // skip segment with NaN or Infinity caused by numeric instablities
-            if (v0.z != l.z) continue;
-            if (v1.z != l.z) continue;
+            if (v0.z != l.z) {
+				std::cout << "[GCodeWriter::write]v0!=layer.z, skip segment " << j << " in layer " << i << std::endl;
+                continue;
+            }
+            if (v1.z != l.z) {
+				std::cout << "[GCodeWriter::write]v1!=layer.z, skip segment " << j << " in layer " << i << std::endl;
+                continue;
+            }
 
             if (v1.distance(position) < v0.distance(position))
                 std::swap(v0, v1);
@@ -145,69 +152,56 @@ void GCodeWriter::write(vector<vector<vector<Vertex>>>& all_slice_points, vector
             {
                 vector<Vertex> temp2;
                 bool temp_bool = true;
-                all_slice_points[all_slice_points.size() - 1].push_back(temp2);
+                layer_points.push_back(temp2);
 
-                Vertex VV;
-                VV.x = v0.x + offset.x; VV.y = v0.y + offset.y; VV.z = l.z + offset.z;
-                all_slice_points[all_slice_points.size() - 1][all_slice_points[all_slice_points.size() - 1].size() - 1].push_back(VV);
+                Vertex VV = v0 + offset;
+                layer_points.back().push_back(VV);
 
                 position = v0;
             }
 
             if (v1.distance(position) > skipDistance)
             {
-                Vertex VV;
-                VV.x = v1.x + offset.x; VV.y = v1.y + offset.y; VV.z = l.z + offset.z;
-                all_slice_points[all_slice_points.size() - 1][all_slice_points[all_slice_points.size() - 1].size() - 1].push_back(VV);
+                Vertex VV = v1 + offset;
+                layer_points.back().push_back(VV);
 
                 position = v1;
             }
         }
 
-        if (all_slice_points[all_slice_points.size() - 1].size() == 0) {
-            all_slice_points.erase(all_slice_points.end() - 1);
-            all_slice_points_contain.erase(all_slice_points_contain.end() - 1);
+        if (layer_points.size() == 0) {
+			all_slice_points.pop_back();
+            all_slice_points_contain.pop_back();
+            continue;
         }
             
 
 
-        all_slice_points_contain[all_slice_points.size() - 1] = all_slice_points[all_slice_points.size() - 1];
-        for (int j = 0; j < all_slice_points[all_slice_points.size() - 1].size(); j++) {
-            all_slice_points_contain[all_slice_points.size() - 1][j].clear();
+        layer_points_contain = layer_points;
+        for (int j = 0; j < layer_points.size(); j++) {
+            layer_points_contain[j].clear();
         }
 
-        for (int j = 0; j < all_slice_points[all_slice_points.size() - 1].size(); j++) {
+        for (int j = 0; j < layer_points.size(); j++) {
             //Point* points = new Point[4];
-            Point* points = new Point[all_slice_points[all_slice_points.size() - 1][j].size()];
-            for (int m = 0; m < all_slice_points[all_slice_points.size() - 1][j].size(); m++) {
-                Point temp_point(all_slice_points[all_slice_points.size() - 1][j][m].x, all_slice_points[all_slice_points.size() - 1][j][m].y);
+            Point* points = new Point[layer_points[j].size()];
+            for (int m = 0; m < layer_points[j].size(); m++) {
+                Point temp_point(layer_points[j][m].x, layer_points[j][m].y);
                 points[m] = temp_point;
                 //all_balls << "v " << points[m].x() << " " << points[m].y() << " 1" << endl;
             }
-            /*Point temp_point1(100, 50);
-            Point temp_point2(200, 50);
-            Point temp_point3(200, 100);
-            Point temp_point4(100, 100);
-            points[0] = temp_point1;
-            points[1] = temp_point2;
-            points[2] = temp_point3;
-            points[3] = temp_point4;
-            all_balls << "v " << temp_point1.x() << " " << temp_point1.y() << " 1" << endl;
-            all_balls << "v " << temp_point2.x() << " " << temp_point2.y() << " 1" << endl;
-            all_balls << "v " << temp_point3.x() << " " << temp_point3.y() << " 1" << endl;
-            all_balls << "v " << temp_point4.x() << " " << temp_point4.y() << " 1" << endl;*/
-            for (int k = 0; k < all_slice_points[all_slice_points.size() - 1].size(); k++) {
+            for (int k = 0; k < layer_points.size(); k++) {
                 bool jud_contain = true;
-                for (int m = 0; m < all_slice_points[all_slice_points.size() - 1][k].size(); m++) {
-                    //all_balls2 << "v " << all_slice_points[all_slice_points.size() - 1][k][m].x << " " << all_slice_points[all_slice_points.size() - 1][k][m].y << " 1" << endl;
-                    if (check_inside(Point(all_slice_points[all_slice_points.size() - 1][k][m].x, all_slice_points[all_slice_points.size() - 1][k][m].y), points, points + all_slice_points[all_slice_points.size() - 1][j].size(), K()) == false)
+                for (int m = 0; m < layer_points[k].size(); m++) {
+                    //all_balls2 << "v " << layer_points[k][m].x << " " << layer_points[k][m].y << " 1" << endl;
+                    if (check_inside(Point(layer_points[k][m].x, layer_points[k][m].y), points, points + layer_points[j].size(), K()) == false)
                         jud_contain = false;
                 }
                 if (jud_contain == true) {
-                    all_slice_points_contain[all_slice_points.size() - 1][j] = all_slice_points[all_slice_points.size() - 1][k];
+                    layer_points_contain[j] = layer_points[k];
 
-                    all_slice_points[all_slice_points.size() - 1].erase(all_slice_points[all_slice_points.size() - 1].begin() + k);
-                    all_slice_points_contain[all_slice_points.size() - 1].erase(all_slice_points_contain[all_slice_points.size() - 1].begin() + k);
+                    layer_points.erase(layer_points.begin() + k);
+                    layer_points_contain.erase(layer_points_contain.begin() + k);
                     if (j >= 1)
                         j -= 2;
                     else

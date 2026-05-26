@@ -4021,7 +4021,7 @@ Layer_Graph HybridManufacturing::BuildAdditiveLayerGraph(
 	vector<vector<vector<Vertex>>> all_slice_points_contain;
 	Katana::Instance().slicer.buildLayers();
 	Katana::Instance().slicer.buildSegments();
-	Katana::Instance().gcode.write(all_slice_points, all_slice_points_contain);	//katana分层并填充边界轮廓
+	Katana::Instance().gcode.write(all_slice_points, all_slice_points_contain);	//katana分层并得到边界轮廓
 	clock_t end_time_6 = clock();
 	slicing_time += double(end_time_6 - start_time_6) / CLOCKS_PER_SEC;
 	/////////////////////////////////////

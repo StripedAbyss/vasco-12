@@ -52,6 +52,9 @@ void Slicer::buildLayers()
 
     for (unsigned int i = 0; i < by_z.size(); i++)
     {
+        //printf("Vertex %d Z: %f (%f, %f, %f), (%f, %f, %f), (%f, %f, %f)\n", i, by_z[i].value, by_z[i].triangle->vertices[0]->x, by_z[i].triangle->vertices[0]->y, by_z[i].triangle->vertices[0]->z
+        //    , by_z[i].triangle->vertices[1]->x, by_z[i].triangle->vertices[1]->y, by_z[i].triangle->vertices[1]->z
+        //    , by_z[i].triangle->vertices[2]->x, by_z[i].triangle->vertices[2]->y, by_z[i].triangle->vertices[2]->z);
         DPRINTF("Vertex %d Z: %f (%f, %f, %f), (%f, %f, %f), (%f, %f, %f)\n", i, by_z[i].value, by_z[i].triangle->vertices[0]->x, by_z[i].triangle->vertices[0]->y, by_z[i].triangle->vertices[0]->z
             , by_z[i].triangle->vertices[1]->x, by_z[i].triangle->vertices[1]->y, by_z[i].triangle->vertices[1]->z
             , by_z[i].triangle->vertices[2]->x, by_z[i].triangle->vertices[2]->y, by_z[i].triangle->vertices[2]->z);
@@ -221,9 +224,10 @@ Segment Slicer::computeSegment(Triangle& t, float z)
     /////////////////////////////////////////////////////////////////////
 
     t.normal = calTriNormal(*vs[0], *vs[1], *vs[2]);
+	assert(t.normal.z < 0.995 && t.normal.z > -0.995);
     Vertex n = t.normal;
-    //n.z = 0; 	        // project normal to z plane
-    //n = n.normalize(); // renormalize z
+    n.z = 0; 	        // project normal to z plane
+    n = n.normalize(); // renormalize z
     segment.normal = n;
     return segment;
 }
@@ -607,8 +611,8 @@ void Slicer::buildSegments()
             
             // TODO what if a triangle is sliced at a very flat angle?
             // those would give poor normals and may cause bad contour offsetting
-            //float nl=length(s.normal);
-            //assert(nl>0.99f && nl<1.01f);
+            float nl=(s.normal).length();
+            assert(nl>0.99f && nl<1.01f);
 
             if (s.vertices[0] != s.vertices[1])
                 layer.segments.push_back(s);
@@ -677,7 +681,8 @@ void Slicer::buildSegments()
 
         segmentsByVertex.clear();
         this->unifySegmentVertices(layer.segments, segmentsByVertex);
-
+        bool has_unconnected_segments = false;
+		bool has_non_manifold_segments = false;
         // link segments by neighbour pointers using the unique vertex map
         for (std::map<Vertex, std::vector<Segment*>>::iterator i = segmentsByVertex.begin(); i != segmentsByVertex.end(); ++i)
         {
@@ -686,6 +691,18 @@ void Slicer::buildSegments()
             // checks disabled to accept non manifolds
             //if(ss.size()==1) assert(!"Unconnected segment");
             // if(ss.size()>2 ) assert(!"Non manifold segment");
+			if (ss.size() == 1)
+			{
+				printf("Unconnected segment at vertex (%f, %f, %f)\n", i->first.x, i->first.y, i->first.z);
+				//assert(!"Unconnected segment");
+				has_unconnected_segments = true;
+			}
+			if (ss.size() > 2)
+			{
+				printf("Non manifold segment at vertex (%f, %f, %f)\n", i->first.x, i->first.y, i->first.z);
+				//assert(!"Non manifold segment");
+				has_non_manifold_segments = true;
+			}
             if (ss.size() != 2) continue;
 
             //////////////////////////////////////����˵��ss.size()==2�����õ��������߶εĶ˵�///////////////////
@@ -713,6 +730,47 @@ void Slicer::buildSegments()
             ss[0]->neighbours[index0] = ss[1];
             ss[1]->neighbours[index1] = ss[0];
         }
+
+        if (has_non_manifold_segments) {
+
+            std::vector <Triangle> triangles_for_debug;
+            for (auto tri : layer.triangles) {
+                triangles_for_debug.push_back(*tri);
+                triangles_for_debug.back()._vertices[0] = *tri->vertices[0];
+                triangles_for_debug.back()._vertices[1] = *tri->vertices[1];
+                triangles_for_debug.back()._vertices[2] = *tri->vertices[2];
+            }
+
+			Katana::Instance().stl.saveStl("model\\non_manifold_segments.stl", triangles_for_debug);
+
+            triangles_for_debug.clear();
+            Triangle temp_tri_1;
+            Triangle temp_tri_2;
+            temp_tri_1.normal = Vertex(0, 0, -1);
+            temp_tri_1._vertices[0] = Vertex(-500, -500, layer.z);
+            temp_tri_1._vertices[1] = Vertex(500, -500, layer.z);
+            temp_tri_1._vertices[2] = Vertex(-500, 500, layer.z);
+            temp_tri_2.normal = Vertex(0, 0, -1);
+            temp_tri_2._vertices[0] = Vertex(500, 500, layer.z);
+            temp_tri_2._vertices[1] = Vertex(-500, 500, layer.z);
+            temp_tri_2._vertices[2] = Vertex(500, -500, layer.z);
+            triangles_for_debug.push_back(temp_tri_1);
+            triangles_for_debug.push_back(temp_tri_2);
+
+			Katana::Instance().stl.saveStl("model\\non_manifold_segments_z.stl", triangles_for_debug);
+
+            for (auto &tri: Katana::Instance().triangles) {
+				tri._vertices[0] = Vertex(*tri.vertices[0]);
+				tri._vertices[1] = Vertex(*tri.vertices[1]);
+				tri._vertices[2] = Vertex(*tri.vertices[2]);
+            }
+
+
+            Katana::Instance().stl.saveStl("model\\non_manifold_triangles_debug.stl", Katana::Instance().triangles);
+            std::cout << "Warning: non manifold segments detected in layer " << layerIndex << std::endl;
+
+        }
+
 
         // now order the segments into consecutive loops.
         int loops = 0;

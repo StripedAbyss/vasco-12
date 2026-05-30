@@ -4,7 +4,7 @@ void Data::ReadData(vector<vector<vector<Vertex>>> all_slice_points, vector<vect
 {
 	int total_layer, s_num, p_num;
 	double x, y, z, x2, y2;
-	total_layer = all_slice_points.size();
+	total_layer = all_slice_points.size(); //层的数量
 	this->slice_points.resize(total_layer);
 	this->slice_points_contain.resize(total_layer);
 	this->z_value.resize(total_layer);
@@ -12,7 +12,7 @@ void Data::ReadData(vector<vector<vector<Vertex>>> all_slice_points, vector<vect
 	this->adjacent_points.resize(total_layer);
 	this->total_node_num = 0;
 	for (int i = 0; i < total_layer; i++) {
-		s_num = all_slice_points[i].size();
+		s_num = all_slice_points[i].size(); // 每层的loop数量	
 		this->total_node_num += s_num;
 		this->slice_points[i].resize(s_num);
 		this->slice_points_contain[i].resize(s_num);
@@ -20,7 +20,7 @@ void Data::ReadData(vector<vector<vector<Vertex>>> all_slice_points, vector<vect
 		this->is_contour[i].resize(s_num);
 		this->adjacent_points[i].resize(s_num);
 		for (int j = 0; j < s_num; j++) {
-			p_num = all_slice_points[i][j].size();
+			p_num = all_slice_points[i][j].size(); // 每个loop的点数量
 			for (int k = 0; k < p_num; k++) {
 				x = all_slice_points[i][j][k].x;
 				y = all_slice_points[i][j][k].y;

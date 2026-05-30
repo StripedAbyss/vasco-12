@@ -60,6 +60,7 @@
 #include <CGAL/Polygon_2.h>
 #include <CGAL/Polygon_2_algorithms.h>
 #include <CGAL/draw_polygon_2.h>
+#include <CGAL/Polygon_mesh_slicer.h>
 #include <iostream>
 #include"earcut.hpp"
 
@@ -226,6 +227,7 @@ public:
 		vector<bool> judge_covering_points_be_searched,
 		bool& jud_admit);
 	//vector<vector<vector<cv::Point3d>>> DFS_search(Layer_Graph layer_graph, vector<vector<int>>& final_pathes_include_S, vector<vector<int>>& final_pathes_include_sample_points, vector<bool> judge_S_be_searched, vector<vector<int>>& all_cut_layers, vector<vector<int>>& all_cut_layers_dependency_layer, vector<vector<int>>& final_paths_include_covering_points, vector<bool> judge_covering_points_be_searched, vector<vector<area_S>> ori_all_the_covering_points);
+	// pre_tree_nodes 参数已移除，统一使用 tree_entries。
 	void sort_candidate_nodes(
 		vector<int>& candidate_nodes,
 		const vector<BeamTreeEntry>& tree_entries,

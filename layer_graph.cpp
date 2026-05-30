@@ -50,6 +50,10 @@ void Layer_Graph::GetTrianglesForLayers(vector<vector<vector<Vertex>>> all_slice
 				if (map_segment_triangles[i].count(temp_pair) <= 0)
 					continue;
 				Triangle* tri = map_segment_triangles[i][temp_pair];
+				if (tri == nullptr) {
+					std::cout << "[Layer_Graph::GetTrianglesForLayers] Triangle is null" << std::endl;
+					continue;
+				}
 				all_triangles_of_layers[cont_num].push_back(tri);
 				//cout << "d" << endl;
 				Vertex* v1 = tri->vertices_2[0];

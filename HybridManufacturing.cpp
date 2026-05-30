@@ -4017,7 +4017,7 @@ Layer_Graph HybridManufacturing::BuildAdditiveLayerGraph(
 	double& graph_time)
 {
 	clock_t start_time_6 = clock();
-	vector<vector<vector<Vertex>>> all_slice_points;
+	vector<vector<vector<Vertex>>> all_slice_points; //(i,j,k) 第i层第j个loop的第k个点的坐标
 	vector<vector<vector<Vertex>>> all_slice_points_contain;
 	Katana::Instance().slicer.buildLayers();
 	Katana::Instance().slicer.buildSegments();

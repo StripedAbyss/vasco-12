@@ -25,6 +25,299 @@ namespace
 	{
 		return point + radius * normal;
 	}
+
+	inline Vertex LocalComputeIntersection(const Vertex& a, const Vertex& b, float z)
+	{
+		float t = (z - a.z) / (b.z - a.z);
+		Vertex intersection = { a.x + t * (b.x - a.x), a.y + t * (b.y - a.y), z };
+		return intersection;
+	}
+
+	inline Vertex LocalCalTriNormal(const Vertex& ver1, const Vertex& ver2, const Vertex& ver3)
+	{
+		float temp1[3], temp2[3], normal[3];
+		temp1[0] = ver2.x - ver1.x;
+		temp1[1] = ver2.y - ver1.y;
+		temp1[2] = ver2.z - ver1.z;
+		temp2[0] = ver3.x - ver2.x;
+		temp2[1] = ver3.y - ver2.y;
+		temp2[2] = ver3.z - ver2.z;
+
+		normal[0] = temp1[1] * temp2[2] - temp1[2] * temp2[1];
+		normal[1] = -(temp1[0] * temp2[2] - temp1[2] * temp2[0]);
+		normal[2] = temp1[0] * temp2[1] - temp1[1] * temp2[0];
+
+		float length = sqrt(normal[0] * normal[0] + normal[1] * normal[1] + normal[2] * normal[2]);
+		if (length == 0.0f) {
+			length = 1.0f;
+		}
+		normal[0] /= length;
+		normal[1] /= length;
+		normal[2] /= length;
+		return Vertex(normal[0], normal[1], normal[2]);
+	}
+
+	inline Segment LocalComputeSegment(Triangle& t, float z)
+	{
+		Vertex** vs = t.vertices;
+		Segment segment;
+		segment.neighbours[0] = NULL;
+		segment.neighbours[1] = NULL;
+		segment.orderIndex = -1;
+
+		assert(vs[0]->z <= vs[1]->z);
+		assert(vs[1]->z <= vs[2]->z);
+		assert(z >= vs[0]->z);
+		assert(z <= vs[2]->z);
+
+		if (z < vs[1]->z) {
+			segment.vertices[0] = LocalComputeIntersection(*vs[0], *vs[1], z);
+			segment.vertices[1] = LocalComputeIntersection(*vs[0], *vs[2], z);
+		}
+		else {
+			segment.vertices[0] = LocalComputeIntersection(*vs[1], *vs[2], z);
+			segment.vertices[1] = LocalComputeIntersection(*vs[0], *vs[2], z);
+		}
+
+		segment.triangle_points.push_back(*t.vertices[0]);
+		segment.triangle_points.push_back(*t.vertices[1]);
+		segment.triangle_points.push_back(*t.vertices[2]);
+
+		t.normal = LocalCalTriNormal(*vs[0], *vs[1], *vs[2]);
+		assert(t.normal.z < 0.995 && t.normal.z > -0.995);
+		Vertex n = t.normal;
+		n.z = 0;
+		n = n.normalize();
+		segment.normal = n;
+		return segment;
+	}
+
+	inline void LocalUnifySegmentVertices(std::vector<Segment>& segments, std::map<Vertex, std::vector<Segment*>>& segmentsByVertex)
+	{
+		for (unsigned int i = 0; i < segments.size(); i++) {
+			Segment& s = segments[i];
+			for (int j = 0; j < 2; j++) {
+				Vertex& v = s.vertices[j];
+				segmentsByVertex[v].push_back(&s);
+			}
+		}
+	}
+
+	inline bool LocalCheckInside(Point pt, Point* pgn_begin, Point* pgn_end)
+	{
+		switch (CGAL::bounded_side_2(pgn_begin, pgn_end, pt, K())) {
+		case CGAL::ON_BOUNDED_SIDE:
+			return true;
+		case CGAL::ON_BOUNDARY:
+		case CGAL::ON_UNBOUNDED_SIDE:
+		default:
+			return false;
+		}
+	}
+}
+
+HybridManufacturing::SurfaceMeshSliceData HybridManufacturing::BuildSurfaceMeshSlices() const
+{
+	SurfaceMeshSliceData slice_data;
+	const double layer_height_value = Katana::Instance().config.get("layer_height");
+	if (layer_height_value <= 0) {
+		return slice_data;
+	}
+
+	std::vector<Eigen::Vector3d> face_normals;
+	face_normals.reserve(current_node_mesh_rotated.number_of_faces());
+	std::map<SurfaceMesh::Face_index, int> face_index_map;
+	int face_id = 0;
+	for (auto face : current_node_mesh_rotated.faces()) {
+		auto halfedge = current_node_mesh_rotated.halfedge(face);
+		auto v0 = current_node_mesh_rotated.target(halfedge);
+		auto v1 = current_node_mesh_rotated.target(current_node_mesh_rotated.next(halfedge));
+		auto v2 = current_node_mesh_rotated.target(current_node_mesh_rotated.next(current_node_mesh_rotated.next(halfedge)));
+		const auto& p0 = current_node_mesh_rotated.point(v0);
+		const auto& p1 = current_node_mesh_rotated.point(v1);
+		const auto& p2 = current_node_mesh_rotated.point(v2);
+		Eigen::Vector3d e1(p1.x() - p0.x(), p1.y() - p0.y(), p1.z() - p0.z());
+		Eigen::Vector3d e2(p2.x() - p0.x(), p2.y() - p0.y(), p2.z() - p0.z());
+		Eigen::Vector3d normal = e1.cross(e2);
+		if (normal.norm() > 0.0) {
+			normal.normalize();
+		}
+		face_normals.push_back(normal);
+		face_index_map[face] = face_id++;
+	}
+	slice_data.face_normals = face_normals;
+
+	double min_z = std::numeric_limits<double>::max();
+	double max_z = -std::numeric_limits<double>::max();
+	for (auto v : current_node_mesh_rotated.vertices()) {
+		const auto& point = current_node_mesh_rotated.point(v);
+		min_z = std::min(min_z, point.z());
+		max_z = std::max(max_z, point.z());
+	}
+	if (min_z >= max_z) {
+		return slice_data;
+	}
+
+	for (double z = min_z + layer_height_value; z <= max_z + 1e-6; z += layer_height_value) {
+		slice_data.layer_z_values.push_back(z);
+	}
+	slice_data.layer_segments.resize(slice_data.layer_z_values.size());
+
+	for (size_t layer_index = 0; layer_index < slice_data.layer_z_values.size(); ++layer_index) {
+		double z = slice_data.layer_z_values[layer_index];
+		auto& layer_segments = slice_data.layer_segments[layer_index];
+		for (auto face : current_node_mesh_rotated.faces()) {
+			auto halfedge = current_node_mesh_rotated.halfedge(face);
+			std::array<Point_3, 3> points;
+			int count = 0;
+			for (auto he : CGAL::halfedges_around_face(halfedge, current_node_mesh_rotated)) {
+				points[count++] = current_node_mesh_rotated.point(current_node_mesh_rotated.target(he));
+				if (count >= 3) {
+					break;
+				}
+			}
+			if (count < 3) {
+				continue;
+			}
+			std::vector<Point_3> intersections;
+			for (int e = 0; e < 3; ++e) {
+				const auto& p0 = points[e];
+				const auto& p1 = points[(e + 1) % 3];
+				if ((p0.z() <= z && p1.z() >= z) || (p1.z() <= z && p0.z() >= z)) {
+					if (p0.z() == p1.z()) {
+						continue;
+					}
+					double t = (z - p0.z()) / (p1.z() - p0.z());
+					Point_3 p(p0.x() + (p1.x() - p0.x()) * t,
+						p0.y() + (p1.y() - p0.y()) * t,
+						z);
+					intersections.push_back(p);
+				}
+			}
+			if (intersections.size() == 2) {
+				SurfaceMeshSliceSegment seg;
+				seg.start = intersections[0];
+				seg.end = intersections[1];
+				seg.face_id = face_index_map[face];
+				layer_segments.push_back(seg);
+			}
+		}
+	}
+
+	return slice_data;
+}
+
+namespace
+{
+	inline double PointDistance2D(const Point_3& a, const Point_3& b)
+	{
+		double dx = a.x() - b.x();
+		double dy = a.y() - b.y();
+		return std::sqrt(dx * dx + dy * dy);
+	}
+
+	inline bool PointsClose(const Point_3& a, const Point_3& b, double tol)
+	{
+		return PointDistance2D(a, b) <= tol;
+	}
+}
+
+void HybridManufacturing::BuildSurfaceMeshContours(
+	SurfaceMeshSliceData& slice_data,
+	double merge_tolerance) const
+{
+	slice_data.all_slice_points.clear();
+	slice_data.all_slice_points_contain.clear();
+	slice_data.contour_face_ids.clear();
+	const double tolerance = merge_tolerance <= 0 ? 1e-6 : merge_tolerance;
+
+	for (size_t layer_index = 0; layer_index < slice_data.layer_segments.size(); ++layer_index) {
+		const auto& segments = slice_data.layer_segments[layer_index];
+		slice_data.all_slice_points.emplace_back();
+		slice_data.all_slice_points_contain.emplace_back();
+		slice_data.contour_face_ids.emplace_back();
+		auto& layer_points = slice_data.all_slice_points.back();
+		auto& layer_points_contain = slice_data.all_slice_points_contain.back();
+		auto& layer_face_ids = slice_data.contour_face_ids.back();
+
+		std::vector<bool> used(segments.size(), false);
+		for (size_t i = 0; i < segments.size(); ++i) {
+			if (used[i]) {
+				continue;
+			}
+			std::vector<Vertex> polyline;
+			std::vector<int> polyline_face_ids;
+			Point_3 start = segments[i].start;
+			Point_3 end = segments[i].end;
+			used[i] = true;
+			polyline.emplace_back(static_cast<float>(start.x()), static_cast<float>(start.y()), static_cast<float>(start.z()));
+			polyline.emplace_back(static_cast<float>(end.x()), static_cast<float>(end.y()), static_cast<float>(end.z()));
+			polyline_face_ids.push_back(segments[i].face_id);
+
+			bool extended = true;
+			while (extended) {
+				extended = false;
+				for (size_t j = 0; j < segments.size(); ++j) {
+					if (used[j]) {
+						continue;
+					}
+					const auto& seg = segments[j];
+					if (PointsClose(seg.start, end, tolerance)) {
+						end = seg.end;
+						polyline.emplace_back(static_cast<float>(end.x()), static_cast<float>(end.y()), static_cast<float>(end.z()));
+						polyline_face_ids.push_back(seg.face_id);
+						used[j] = true;
+						extended = true;
+						break;
+					}
+					if (PointsClose(seg.end, end, tolerance)) {
+						end = seg.start;
+						polyline.emplace_back(static_cast<float>(end.x()), static_cast<float>(end.y()), static_cast<float>(end.z()));
+						polyline_face_ids.push_back(seg.face_id);
+						used[j] = true;
+						extended = true;
+						break;
+					}
+				}
+			}
+
+			if (polyline.size() >= 2) {
+				layer_points.push_back(polyline);
+				layer_points_contain.push_back(std::vector<Vertex>());
+				layer_face_ids.push_back(polyline_face_ids);
+			}
+		}
+
+		for (int j = 0; j < layer_points.size(); j++) {
+			layer_points_contain[j].clear();
+		}
+		for (int j = 0; j < layer_points.size(); j++) {
+			Point* points = new Point[layer_points[j].size()];
+			for (int m = 0; m < layer_points[j].size(); m++) {
+				Point temp_point(layer_points[j][m].x, layer_points[j][m].y);
+				points[m] = temp_point;
+			}
+			for (int k = 0; k < layer_points.size(); k++) {
+				bool jud_contain = true;
+				for (int m = 0; m < layer_points[k].size(); m++) {
+					if (!LocalCheckInside(Point(layer_points[k][m].x, layer_points[k][m].y), points, points + layer_points[j].size()))
+						jud_contain = false;
+				}
+				if (jud_contain) {
+					layer_points_contain[j] = layer_points[k];
+					layer_points.erase(layer_points.begin() + k);
+					layer_points_contain.erase(layer_points_contain.begin() + k);
+					layer_face_ids.erase(layer_face_ids.begin() + k);
+					if (j >= 1)
+						j -= 2;
+					else
+						j--;
+					break;
+				}
+			}
+			delete[] points;
+		}
+	}
 }
 
 HybridManufacturing::HybridManufacturing(std::string file_name, std::string suf, Eigen::MatrixXd V, Eigen::MatrixXi F, Eigen::MatrixXd N)
@@ -1085,6 +1378,412 @@ void HybridManufacturing::VisualizeCutLayers(
 		visualize_layers_stair_case(vis_file, vis_file_contain, current_orientation, judge_continue_additive, id_continue);
 }
 
+void HybridManufacturing::Visualize_layer_segments(const std::vector<Layer>& layers) const
+{
+	vector<vector<cv::Point3d>> lines;
+	for (const auto& layer : layers) {
+		for (const auto& segment : layer.segments) {
+			lines.emplace_back();
+			auto& segment_line = lines.back();
+			segment_line.emplace_back(segment.vertices[0].x, segment.vertices[0].y, layer.z);
+			segment_line.emplace_back(segment.vertices[1].x, segment.vertices[1].y, layer.z);
+		}
+	}
+
+	Visual vis;
+	vis.generateModelForRendering_9(lines, file_name + "_katana_layers.obj");
+}
+
+void HybridManufacturing::Visualize_layer_polylines(const std::vector<Polylines>& layer_polylines) const
+{
+	vector<vector<cv::Point3d>> lines;
+	for (const auto& layer : layer_polylines) {
+		for (const auto& polyline : layer) {
+			if (polyline.size() < 2) {
+				continue;
+			}
+			lines.emplace_back();
+			auto& polyline_line = lines.back();
+			polyline_line.reserve(polyline.size());
+			for (const auto& point : polyline) {
+				polyline_line.emplace_back(point.x(), point.y(), point.z());
+			}
+		}
+	}
+
+	Visual vis;
+	vis.generateModelForRendering_9(lines, file_name + "_cgal_polylines.obj");
+}
+
+HybridManufacturing::LocalSlicingData HybridManufacturing::BuildLocalSlicingDataFromRotatedMesh() const
+{
+	LocalSlicingData data;
+	data.vertices.clear();
+	data.triangles.clear();
+	data.layers.clear();
+	data.map_segment_triangles.clear();
+
+	data.vertices.reserve(current_node_mesh_rotated.number_of_vertices());
+	std::map<SurfaceMesh::Vertex_index, int> vertex_index_map;
+	int index = 0;
+	for (auto v : current_node_mesh_rotated.vertices()) {
+		const auto& point = current_node_mesh_rotated.point(v);
+		data.vertices.emplace_back(static_cast<float>(point.x()), static_cast<float>(point.y()), static_cast<float>(point.z()));
+		vertex_index_map[v] = index++;
+	}
+
+	data.triangles.reserve(current_node_mesh_rotated.number_of_faces());
+	for (auto face : current_node_mesh_rotated.faces()) {
+		Triangle tri;
+		int face_vertex_count = 0;
+		for (auto halfedge : CGAL::halfedges_around_face(current_node_mesh_rotated.halfedge(face), current_node_mesh_rotated)) {
+			auto vertex = current_node_mesh_rotated.target(halfedge);
+			int v_index = vertex_index_map[vertex];
+			tri.vertices[face_vertex_count] = &data.vertices[v_index];
+			tri._vertices[face_vertex_count] = data.vertices[v_index];
+			face_vertex_count++;
+			if (face_vertex_count >= 3) {
+				break;
+			}
+		}
+		if (face_vertex_count == 3) {
+			data.triangles.push_back(tri);
+		}
+	}
+
+	return data;
+}
+
+void HybridManufacturing::LocalBuildLayers(LocalSlicingData& slicing_data) const
+{
+	std::vector<VertexIndex> by_z;
+	by_z.clear();
+	slicing_data.layers.clear();
+	for (auto& triangle : slicing_data.triangles) {
+		for (int j = 0; j < 3; j++) {
+			VertexIndex vi = { triangle.vertices[j]->z, &triangle };
+			by_z.push_back(vi);
+		}
+	}
+	if (by_z.empty()) {
+		return;
+	}
+	std::sort(by_z.begin(), by_z.end());
+
+	std::map<Triangle*, int> active_triangles;
+	slicing_data.min_z = by_z.front().value;
+	float max_z = by_z.back().value;
+	layer_height = Katana::Instance().config.get("layer_height");
+	if (layer_height <= 0) {
+		return;
+	}
+
+	float next_layer_z = slicing_data.min_z + layer_height;
+	for (unsigned int i = 0; i < by_z.size(); i++) {
+		float z = by_z[i].value;
+		while (z > next_layer_z) {
+			Layer layer;
+			layer.z = next_layer_z;
+			for (auto& entry : active_triangles) {
+				layer.triangles.push_back(entry.first);
+			}
+			slicing_data.layers.push_back(layer);
+			next_layer_z += layer_height;
+			if (next_layer_z > max_z + layer_height) {
+				break;
+			}
+		}
+
+		Triangle* triangle = by_z[i].triangle;
+		int vertices_passed = 1;
+		auto found = active_triangles.find(triangle);
+		if (found != active_triangles.end()) {
+			vertices_passed = found->second + 1;
+		}
+		active_triangles[triangle] = vertices_passed;
+		if (vertices_passed == 3) {
+			active_triangles.erase(triangle);
+		}
+	}
+}
+
+bool HybridManufacturing::LocalBuildSegments(LocalSlicingData& slicing_data) const
+{
+	bool result = true;
+	slicing_data.map_segment_triangles.clear();
+	slicing_data.map_segment_triangles.resize(slicing_data.layers.size());
+	for (unsigned int layerIndex = 0; layerIndex < slicing_data.layers.size(); layerIndex++) {
+		Layer& layer = slicing_data.layers[layerIndex];
+		for (unsigned int i = 0; i < layer.triangles.size(); i++) {
+			Triangle* t = layer.triangles[i];
+			Segment s = LocalComputeSegment(*t, layer.z);
+			float nl = (s.normal).length();
+			assert(nl > 0.99f && nl < 1.01f);
+			if (s.vertices[0] != s.vertices[1]) {
+				layer.segments.push_back(s);
+			}
+			else {
+				layer.triangles.erase(layer.triangles.begin() + i);
+				i--;
+				continue;
+			}
+			std::pair<Vertex, Vertex> temp_pair;
+			temp_pair.first = s.vertices[0];
+			temp_pair.second = s.vertices[1];
+			slicing_data.map_segment_triangles[layerIndex].insert({ temp_pair, layer.triangles[i] });
+			temp_pair.first = s.vertices[1];
+			temp_pair.second = s.vertices[0];
+			slicing_data.map_segment_triangles[layerIndex].insert({ temp_pair, layer.triangles[i] });
+		}
+
+		std::map<Vertex, std::vector<Segment*>> segmentsByVertex;
+		LocalUnifySegmentVertices(layer.segments, segmentsByVertex);
+		std::vector<int> end_segments_index;
+		bool has_unconnected_segments = false;
+		bool has_non_manifold_segments = false;
+		for (auto it = segmentsByVertex.begin(); it != segmentsByVertex.end(); ++it) {
+			std::vector<Segment*>& ss = it->second;
+			if (ss.size() == 1) {
+				for (int j = 0; j < layer.segments.size(); j++) {
+					if (layer.segments[j].vertices[0] == ss[0]->vertices[0]
+						&& layer.segments[j].vertices[1] == ss[0]->vertices[1]) {
+						end_segments_index.push_back(j);
+						break;
+					}
+				}
+				for (int j = 0; j < end_segments_index.size() - 1; j++) {
+					if (end_segments_index[j] == end_segments_index[end_segments_index.size() - 1])
+						end_segments_index.pop_back();
+				}
+			}
+			if (ss.size() == 1) {
+				has_unconnected_segments = true;
+			}
+			if (ss.size() > 2) {
+				has_non_manifold_segments = true;
+			}
+		}
+
+		for (int i = 0; i < end_segments_index.size(); i++) {
+			for (int j = i + 1; j < end_segments_index.size(); j++) {
+				if (end_segments_index[i] > end_segments_index[j]) {
+					swap(end_segments_index[j], end_segments_index[i]);
+				}
+			}
+		}
+		for (int i = 0; i < end_segments_index.size(); i++) {
+			Segment temp = layer.segments[i];
+			layer.segments[i] = layer.segments[end_segments_index[i]];
+			layer.segments[end_segments_index[i]] = temp;
+		}
+
+		segmentsByVertex.clear();
+		LocalUnifySegmentVertices(layer.segments, segmentsByVertex);
+		for (auto it = segmentsByVertex.begin(); it != segmentsByVertex.end(); ++it) {
+			std::vector<Segment*>& ss = it->second;
+			if (ss.size() != 2) {
+				continue;
+			}
+			Vertex v = it->first;
+			int index0, index1;
+			if (ss[0]->vertices[0] == v) index0 = 1;
+			else if (ss[0]->vertices[1] == v) index0 = 0;
+			else assert(!"bad index0");
+
+			if (ss[1]->vertices[0] == v) index1 = 1;
+			else if (ss[1]->vertices[1] == v) index1 = 0;
+			else assert(!"bad index1");
+
+			assert(ss[0]->neighbours[index0] == NULL);
+			assert(ss[1]->neighbours[index1] == NULL);
+			ss[0]->neighbours[index0] = ss[1];
+			ss[1]->neighbours[index1] = ss[0];
+		}
+
+		if (has_non_manifold_segments || has_unconnected_segments) {
+			result = false;
+		}
+
+		int loops = 0;
+		long orderIndex = 0;
+		for (unsigned int i = 0; i < layer.segments.size(); i++) {
+			Segment& segment = layer.segments[i];
+			if (segment.orderIndex != -1) continue;
+			Segment* s2 = &segment;
+			while (true) {
+				s2->orderIndex = orderIndex++;
+				if (s2->neighbours[0] != NULL && s2->neighbours[0]->orderIndex == -1)
+					s2 = s2->neighbours[0];
+				else if (s2->neighbours[1] != NULL && s2->neighbours[1]->orderIndex == -1)
+					s2 = s2->neighbours[1];
+				else break;
+			}
+			loops++;
+		}
+		std::sort(layer.segments.begin(), layer.segments.end());
+	}
+
+	return result;
+}
+
+void HybridManufacturing::LocalWriteSlicePoints(
+	LocalSlicingData& slicing_data,
+	std::vector<std::vector<std::vector<Vertex>>>& all_slice_points,
+	std::vector<std::vector<std::vector<Vertex>>>& all_slice_points_contain) const
+{
+	all_slice_points.clear();
+	all_slice_points_contain.clear();
+
+	float skipDistance = .0001f;
+	Vertex offset = { 0,0,0 };
+	Vertex position = { 0,0,0 };
+	std::vector<std::vector<Vertex>> normal_segments;
+	normal_segments.resize(slicing_data.layers.size());
+
+	for (unsigned int i = 0; i < slicing_data.layers.size(); i++) {
+		all_slice_points.emplace_back();
+		all_slice_points_contain.emplace_back();
+		auto& layer_points = all_slice_points.back();
+		auto& layer_points_contain = all_slice_points_contain.back();
+		Layer& l = slicing_data.layers[i];
+
+		normal_segments[i].resize(l.segments.size());
+		for (unsigned int j = 0; j < l.segments.size(); j++) {
+			normal_segments[i][j] = l.segments[j].normal;
+			Vertex& v0 = l.segments[j].vertices[0];
+			Vertex& v1 = l.segments[j].vertices[1];
+			if (v0.z != l.z || v1.z != l.z) {
+				continue;
+			}
+
+			if (v1.distance(position) < v0.distance(position))
+				std::swap(v0, v1);
+			if (j != l.segments.size() - 1) {
+				if (v0 == l.segments[j + 1].vertices[0] || v0 == l.segments[j + 1].vertices[1])
+					swap(v0, v1);
+			}
+
+			float d = v0.distance(position);
+			if (d > skipDistance) {
+				layer_points.emplace_back();
+				Vertex vv = v0 + offset;
+				layer_points.back().push_back(vv);
+				position = v0;
+			}
+			if (v1.distance(position) > skipDistance) {
+				Vertex vv = v1 + offset;
+				layer_points.back().push_back(vv);
+				position = v1;
+			}
+		}
+
+		if (layer_points.empty()) {
+			all_slice_points.pop_back();
+			all_slice_points_contain.pop_back();
+			continue;
+		}
+
+		layer_points_contain = layer_points;
+		for (int j = 0; j < layer_points.size(); j++) {
+			layer_points_contain[j].clear();
+		}
+
+		for (int j = 0; j < layer_points.size(); j++) {
+			Point* points = new Point[layer_points[j].size()];
+			for (int m = 0; m < layer_points[j].size(); m++) {
+				Point temp_point(layer_points[j][m].x, layer_points[j][m].y);
+				points[m] = temp_point;
+			}
+			for (int k = 0; k < layer_points.size(); k++) {
+				bool jud_contain = true;
+				for (int m = 0; m < layer_points[k].size(); m++) {
+					if (!LocalCheckInside(Point(layer_points[k][m].x, layer_points[k][m].y), points, points + layer_points[j].size()))
+						jud_contain = false;
+				}
+				if (jud_contain) {
+					layer_points_contain[j] = layer_points[k];
+					layer_points.erase(layer_points.begin() + k);
+					layer_points_contain.erase(layer_points_contain.begin() + k);
+					if (j >= 1)
+						j -= 2;
+					else
+						j--;
+					break;
+				}
+			}
+			delete[] points;
+		}
+	}
+}
+
+Layer_Graph HybridManufacturing::BuildAdditiveLayerGraphWithLocalSlicer(
+	const Eigen::Vector3d& vector_after,
+	int height_of_beam_search,
+	int continue_node_id,
+	const nozzle& the_nozzle,
+	double& slicing_time,
+	double& graph_time) const
+{
+	clock_t start_time_6 = clock();
+	std::vector<std::vector<std::vector<Vertex>>> all_slice_points;
+	std::vector<std::vector<std::vector<Vertex>>> all_slice_points_contain;
+
+	LocalSlicingData slicing_data = BuildLocalSlicingDataFromRotatedMesh();
+	LocalBuildLayers(slicing_data);
+	LocalBuildSegments(slicing_data);
+	LocalWriteSlicePoints(slicing_data, all_slice_points, all_slice_points_contain);
+
+	clock_t end_time_6 = clock();
+	slicing_time += double(end_time_6 - start_time_6) / CLOCKS_PER_SEC;
+
+	std::vector<Data> data;
+	data.resize(1);
+	data[0].ReadData(all_slice_points, all_slice_points_contain);
+	Layer_Graph layer_graph(data[0]);
+	clock_t start_time_4 = clock();
+	layer_graph.GetTrianglesForLayers(all_slice_points, slicing_data.map_segment_triangles, slicing_data.vertices, vector_after, height_of_beam_search, continue_node_id);
+	layer_graph.GenerateDependencyEdges();
+	layer_graph.CollisionDetectionForAdditiveManufacturing(the_nozzle);
+	clock_t end_time_4 = clock();
+	graph_time += double(end_time_4 - start_time_4) / CLOCKS_PER_SEC;
+
+	return layer_graph;
+}
+
+Layer_Graph HybridManufacturing::BuildAdditiveLayerGraphWithSurfaceMesh(
+	const Eigen::Vector3d& vector_after,
+	int height_of_beam_search,
+	int continue_node_id,
+	const nozzle& the_nozzle,
+	double& slicing_time,
+	double& graph_time) const
+{
+	clock_t start_time_6 = clock();
+	SurfaceMeshSliceData slice_data = BuildSurfaceMeshSlices();
+	BuildSurfaceMeshContours(slice_data);
+
+	clock_t end_time_6 = clock();
+	slicing_time += double(end_time_6 - start_time_6) / CLOCKS_PER_SEC;
+
+	std::vector<Data> data;
+	data.resize(1);
+	data[0].ReadData(slice_data.all_slice_points, slice_data.all_slice_points_contain);
+	Layer_Graph layer_graph(data[0]);
+	clock_t start_time_4 = clock();
+	layer_graph.GetTrianglesForLayersFromMesh(
+		slice_data.contour_face_ids,
+		slice_data.face_normals,
+		vector_after,
+		height_of_beam_search,
+		continue_node_id);
+	layer_graph.GenerateDependencyEdges();
+	layer_graph.CollisionDetectionForAdditiveManufacturing(the_nozzle);
+	clock_t end_time_4 = clock();
+	graph_time += double(end_time_4 - start_time_4) / CLOCKS_PER_SEC;
+
+	return layer_graph;
+}
+
 std::vector<std::vector<int>> HybridManufacturing::EvaluateMergedPatchToolCollision(
 	const Slicer_2& merged_patch,
 	const std::vector<int>& merged_face_source_patch_id,
@@ -1492,7 +2191,7 @@ void HybridManufacturing::CutMesh(
 	bool judge_continue_additive,
 	bool flag_is_continue_block,
 	int pre_cont_number_of_queue,
-	bool & jud_error,
+	bool& jud_error,
 	int id_node,
 	int id_continue,
 	vector<int> flag_cut_layers_is_hole)
@@ -2235,9 +2934,9 @@ void HybridManufacturing::subtractive_accessibility_decomposition(
 	cutting_tool.carriage_height = 33;
 
 	/////show all accessible points in every orientation/////
-	Eigen::MatrixXd V_2;
-	Eigen::MatrixXi F_2;
-	igl::readOBJ("ball.obj", V_2, F_2);
+	Eigen::MatrixXd V_B2;
+	Eigen::MatrixXi F_B2;
+	igl::readOBJ("ball.obj", V_B2, F_B2);
 	const Slicer_2 slicer = current_slicer; //加个const看看有没有涉及更改
 	/*slicer.load((file_name + "-" + to_string(height_of_beam_search - 1) + "_" + to_string(cont_number_of_queue) + ".obj").c_str());*/
 
@@ -2245,13 +2944,13 @@ void HybridManufacturing::subtractive_accessibility_decomposition(
 	vector<cv::Point3d> all_sample_points_in_triangles(need_detect_triangle.size());
 	for (int i = 0; i < need_detect_triangle.size(); i++) {
 
-		cv::Point3d V_1(slicer.positions[need_detect_triangle[i][0]][0], slicer.positions[need_detect_triangle[i][0]][1], slicer.positions[need_detect_triangle[i][0]][2]);
-		cv::Point3d V_2(slicer.positions[need_detect_triangle[i][1]][0], slicer.positions[need_detect_triangle[i][1]][1], slicer.positions[need_detect_triangle[i][1]][2]);
-		cv::Point3d V_3(slicer.positions[need_detect_triangle[i][2]][0], slicer.positions[need_detect_triangle[i][2]][1], slicer.positions[need_detect_triangle[i][2]][2]);
-		double a = distance3d(V_1, V_2);
-		double b = distance3d(V_1, V_3);
-		double c = distance3d(V_2, V_3);
-		cv::Point3d V_incentre(((a * V_1.x + b * V_2.x + c * V_3.x) / (a + b + c)), ((a * V_1.y + b * V_2.y + c * V_3.y) / (a + b + c)), ((a * V_1.z + b * V_2.z + c * V_3.z) / (a + b + c)));
+		cv::Point3d Point1(slicer.positions[need_detect_triangle[i][0]][0], slicer.positions[need_detect_triangle[i][0]][1], slicer.positions[need_detect_triangle[i][0]][2]);
+		cv::Point3d Point2(slicer.positions[need_detect_triangle[i][1]][0], slicer.positions[need_detect_triangle[i][1]][1], slicer.positions[need_detect_triangle[i][1]][2]);
+		cv::Point3d Point3(slicer.positions[need_detect_triangle[i][2]][0], slicer.positions[need_detect_triangle[i][2]][1], slicer.positions[need_detect_triangle[i][2]][2]);
+		double a = distance3d(Point1, Point2);
+		double b = distance3d(Point1, Point3);
+		double c = distance3d(Point2, Point3);
+		cv::Point3d V_incentre(((a * Point1.x + b * Point2.x + c * Point3.x) / (a + b + c)), ((a * Point1.y + b * Point2.y + c * Point3.y) / (a + b + c)), ((a * Point1.z + b * Point2.z + c * Point3.z) / (a + b + c)));
 		all_sample_points_in_triangles[i] = V_incentre;
 	}
 	///////////////////////////////////////////////////
@@ -2311,12 +3010,12 @@ void HybridManufacturing::subtractive_accessibility_decomposition(
 		vector<Eigen::Vector3d> all_normals_of_need_detect_triangle;
 		all_normals_of_need_detect_triangle.clear();
 		for (int i = 0; i < need_detect_triangle.size(); i++) {
-			cv::Point3d V_1(temp_V_need_detect_triangle[i][0](0, 0), temp_V_need_detect_triangle[i][0](1, 0), temp_V_need_detect_triangle[i][0](2, 0));
-			cv::Point3d V_2(temp_V_need_detect_triangle[i][1](0, 0), temp_V_need_detect_triangle[i][1](1, 0), temp_V_need_detect_triangle[i][1](2, 0));
-			cv::Point3d V_3(temp_V_need_detect_triangle[i][2](0, 0), temp_V_need_detect_triangle[i][2](1, 0), temp_V_need_detect_triangle[i][2](2, 0));
-			double na = (V_2.y - V_1.y) * (V_3.z - V_1.z) - (V_2.z - V_1.z) * (V_3.y - V_1.y);
-			double nb = (V_2.z - V_1.z) * (V_3.x - V_1.x) - (V_2.x - V_1.x) * (V_3.z - V_1.z);
-			double nc = (V_2.x - V_1.x) * (V_3.y - V_1.y) - (V_2.y - V_1.y) * (V_3.x - V_1.x);
+			cv::Point3d Point1(temp_V_need_detect_triangle[i][0](0, 0), temp_V_need_detect_triangle[i][0](1, 0), temp_V_need_detect_triangle[i][0](2, 0));
+			cv::Point3d Point2(temp_V_need_detect_triangle[i][1](0, 0), temp_V_need_detect_triangle[i][1](1, 0), temp_V_need_detect_triangle[i][1](2, 0));
+			cv::Point3d Point3(temp_V_need_detect_triangle[i][2](0, 0), temp_V_need_detect_triangle[i][2](1, 0), temp_V_need_detect_triangle[i][2](2, 0));
+			double na = (Point2.y - Point1.y) * (Point3.z - Point1.z) - (Point2.z - Point1.z) * (Point3.y - Point1.y);
+			double nb = (Point2.z - Point1.z) * (Point3.x - Point1.x) - (Point2.x - Point1.x) * (Point3.z - Point1.z);
+			double nc = (Point2.x - Point1.x) * (Point3.y - Point1.y) - (Point2.y - Point1.y) * (Point3.x - Point1.x);
 			Eigen::Vector3d vn(na, nb, nc);
 			vn.normalize();
 			all_normals_of_need_detect_triangle.push_back(vn);
@@ -2361,10 +3060,10 @@ void HybridManufacturing::subtractive_accessibility_decomposition(
 			vis_points[i] = rotMatrix.inverse() * vis_points[i];
 		ofstream all_balls(".\\vis\\coral_accessible_points_in_ori-" + to_string(ori) + ".obj");
 		for (int i = 0; i < vis_points.size(); i++) {
-			for (int j = 0; j < V_2.rows(); j++)
-				all_balls << "v " << V_2(j, 0) + vis_points[i](0, 0) << " " << V_2(j, 1) + vis_points[i](1, 0) << " " << V_2(j, 2) + vis_points[i](2, 0) << " 0.9" << " 0.05" << " 0.05" << endl;
-			for (int j = 0; j < F_2.rows(); j++)
-				all_balls << "f " << F_2(j, 0) + i * V_2.rows() + 1 << " " << F_2(j, 1) + i * V_2.rows() + 1 << " " << F_2(j, 2) + i * V_2.rows() + 1 << endl;
+			for (int j = 0; j < V_B2.rows(); j++)
+				all_balls << "v " << V_B2(j, 0) + vis_points[i](0, 0) << " " << V_B2(j, 1) + vis_points[i](1, 0) << " " << V_B2(j, 2) + vis_points[i](2, 0) << " 0.9" << " 0.05" << " 0.05" << endl;
+			for (int j = 0; j < F_B2.rows(); j++)
+				all_balls << "f " << F_B2(j, 0) + i * V_B2.rows() + 1 << " " << F_B2(j, 1) + i * V_B2.rows() + 1 << " " << F_B2(j, 2) + i * V_B2.rows() + 1 << endl;
 		}
 		all_balls.close();
 		Visual vis;
@@ -2517,10 +3216,10 @@ void HybridManufacturing::subtractive_accessibility_decomposition(
 		double g = rand() / double(RAND_MAX);
 		double b = rand() / double(RAND_MAX);
 		for (int j = 0; j < vis_points[i].size(); j++) {
-			for (int k = 0; k < V_2.rows(); k++)
-				all_balls << "v " << V_2(k, 0) + vis_points[i][j](0, 0) << " " << V_2(k, 1) + vis_points[i][j](1, 0) << " " << V_2(k, 2) + vis_points[i][j](2, 0) << " " << r << " " << g << " " << b << endl;
-			for (int k = 0; k < F_2.rows(); k++)
-				all_balls << "f " << F_2(k, 0) + cont_v * V_2.rows() + 1 << " " << F_2(k, 1) + cont_v * V_2.rows() + 1 << " " << F_2(k, 2) + cont_v * V_2.rows() + 1 << endl;
+			for (int k = 0; k < V_B2.rows(); k++)
+				all_balls << "v " << V_B2(k, 0) + vis_points[i][j](0, 0) << " " << V_B2(k, 1) + vis_points[i][j](1, 0) << " " << V_B2(k, 2) + vis_points[i][j](2, 0) << " " << r << " " << g << " " << b << endl;
+			for (int k = 0; k < F_B2.rows(); k++)
+				all_balls << "f " << F_B2(k, 0) + cont_v * V_B2.rows() + 1 << " " << F_B2(k, 1) + cont_v * V_B2.rows() + 1 << " " << F_B2(k, 2) + cont_v * V_B2.rows() + 1 << endl;
 			cont_v++;
 		}
 	}
@@ -2575,9 +3274,9 @@ void HybridManufacturing::subtractive_accessibility_decomposition_global(int hei
 	cutting_tool.carriage_height = 33;
 
 	/////show all accessible points in every orientation/////
-	Eigen::MatrixXd V_2;
-	Eigen::MatrixXi F_2;
-	igl::readOBJ("ball.obj", V_2, F_2);
+	Eigen::MatrixXd V_B2;
+	Eigen::MatrixXi F_B2;
+	igl::readOBJ("ball.obj", V_B2, F_B2);
 
 	Slicer_2 slicer_load_current_patch;
 
@@ -2968,9 +3667,9 @@ int HybridManufacturing::subtractive_accessibility_decomposition_local(int heigh
 	cutting_tool.carriage_height = 33;
 
 	/////show all accessible points in every orientation/////
-	Eigen::MatrixXd V_2;
-	Eigen::MatrixXi F_2;
-	igl::readOBJ("ball.obj", V_2, F_2);
+	Eigen::MatrixXd V_B2;
+	Eigen::MatrixXi F_B2;
+	igl::readOBJ("ball.obj", V_B2, F_B2);
 
 	Slicer_2 slicer_load_current_patch;
 
@@ -3182,12 +3881,12 @@ vector<vector<int>> HybridManufacturing::getAccessOri(const Slicer_2& slicer, Sl
 		vector<Eigen::Vector3d> all_normals_of_need_detect_triangle;
 		all_normals_of_need_detect_triangle.clear();
 		for (int i = 0; i < need_detect_triangle.size(); i++) {
-			cv::Point3d V_1(temp_V_need_detect_triangle[i][0](0, 0), temp_V_need_detect_triangle[i][0](1, 0), temp_V_need_detect_triangle[i][0](2, 0));
-			cv::Point3d V_2(temp_V_need_detect_triangle[i][1](0, 0), temp_V_need_detect_triangle[i][1](1, 0), temp_V_need_detect_triangle[i][1](2, 0));
-			cv::Point3d V_3(temp_V_need_detect_triangle[i][2](0, 0), temp_V_need_detect_triangle[i][2](1, 0), temp_V_need_detect_triangle[i][2](2, 0));
-			double na = (V_2.y - V_1.y) * (V_3.z - V_1.z) - (V_2.z - V_1.z) * (V_3.y - V_1.y);
-			double nb = (V_2.z - V_1.z) * (V_3.x - V_1.x) - (V_2.x - V_1.x) * (V_3.z - V_1.z);
-			double nc = (V_2.x - V_1.x) * (V_3.y - V_1.y) - (V_2.y - V_1.y) * (V_3.x - V_1.x);
+			cv::Point3d Point1(temp_V_need_detect_triangle[i][0](0, 0), temp_V_need_detect_triangle[i][0](1, 0), temp_V_need_detect_triangle[i][0](2, 0));
+			cv::Point3d Point2(temp_V_need_detect_triangle[i][1](0, 0), temp_V_need_detect_triangle[i][1](1, 0), temp_V_need_detect_triangle[i][1](2, 0));
+			cv::Point3d Point3(temp_V_need_detect_triangle[i][2](0, 0), temp_V_need_detect_triangle[i][2](1, 0), temp_V_need_detect_triangle[i][2](2, 0));
+			double na = (Point2.y - Point1.y) * (Point3.z - Point1.z) - (Point2.z - Point1.z) * (Point3.y - Point1.y);
+			double nb = (Point2.z - Point1.z) * (Point3.x - Point1.x) - (Point2.x - Point1.x) * (Point3.z - Point1.z);
+			double nc = (Point2.x - Point1.x) * (Point3.y - Point1.y) - (Point2.y - Point1.y) * (Point3.x - Point1.x);
 			Eigen::Vector3d vn(na, nb, nc);
 			vn.normalize();
 			all_normals_of_need_detect_triangle.push_back(vn);
@@ -3387,12 +4086,17 @@ void HybridManufacturing::PrepareOuterBeamSearchNode(
 	//load blocks//
 	const char* config_path = "config.ini";
 	Katana::Instance().config.loadConfig(config_path);
+	current_node_mesh.clear();
 	if (tree_entries[now_last_node].judge_continue == false) {
-		Katana::Instance().stl.loadStl((file_name + "-" + to_string(height_of_beam_search) + "_" + to_string(cont_number_of_queue) + ".stl").c_str());	//加载当前节点对应的模型
+		std::string current_file_name = file_name + "-" + to_string(height_of_beam_search) + "_" + to_string(cont_number_of_queue) + ".stl";
+		Katana::Instance().stl.loadStl(current_file_name.c_str());	//加载当前节点对应的模型
+		CGAL::IO::read_polygon_mesh(current_file_name, current_node_mesh);	//加载当前节点对应的模型
 		cout << "T" << endl;
 	}
 	else {
-		Katana::Instance().stl.loadStl((file_name + "-" + to_string(height_of_beam_search - 1) + "_" + to_string(tree_entries[now_last_node].pre_queue_index) + ".stl").c_str());
+		std::string current_file_name = file_name + "-" + to_string(height_of_beam_search - 1) + "_" + to_string(tree_entries[now_last_node].pre_queue_index) + ".stl";
+		Katana::Instance().stl.loadStl(current_file_name.c_str());
+		CGAL::IO::read_polygon_mesh(current_file_name, current_node_mesh);
 		cout << "U" << now_last_node << endl;
 	}
 	Katana::Instance().temp_vertices.resize(Katana::Instance().vertices.size());	//更新当前模型的顶点信息
@@ -4004,6 +4708,20 @@ bool HybridManufacturing::PrepareOrientationSliceData(
 		if (Katana::Instance().triangles[i].vertices[1]->z > Katana::Instance().triangles[i].vertices[2]->z) std::swap(Katana::Instance().triangles[i].vertices[1], Katana::Instance().triangles[i].vertices[2]);
 	}
 
+	current_node_mesh_rotated.clear();
+	current_node_mesh_rotated = current_node_mesh;
+
+	for (auto it : current_node_mesh_rotated.vertices())
+	{
+		auto& vertex = current_node_mesh_rotated.point(it);
+		auto temp_vec = Eigen::Vector3d(vertex.x(), vertex.y(), vertex.z());
+		temp_vec = rot_matrix.inverse() * temp_vec;
+		vertex = Point_3(temp_vec.x(), temp_vec.y(), temp_vec.z());
+	}
+
+	CGAL::IO::write_polygon_mesh("model\\temp_current_node_mesh.obj", current_node_mesh);
+	CGAL::IO::write_polygon_mesh("model\\temp_rotated.obj", current_node_mesh_rotated);
+
 	return true;
 }
 
@@ -4020,8 +4738,27 @@ Layer_Graph HybridManufacturing::BuildAdditiveLayerGraph(
 	vector<vector<vector<Vertex>>> all_slice_points; //(i,j,k) 第i层第j个loop的第k个点的坐标
 	vector<vector<vector<Vertex>>> all_slice_points_contain;
 	Katana::Instance().slicer.buildLayers();
-	Katana::Instance().slicer.buildSegments();
+
+
+	bool segments_manifold = Katana::Instance().slicer.buildSegments();
+	if (!segments_manifold) {
+		std::cout << "[HybridManufacturing::BuildAdditiveLayerGraph] !segments_manifold" << std::endl;
+		Visualize_layer_segments(Katana::Instance().layers);
+
+		CGAL::Polygon_mesh_slicer<SurfaceMesh, Kernel> slicer_cgal(current_node_mesh_rotated);
+		std::vector<Polylines> layer_polylines;
+		layer_polylines.resize(Katana::Instance().layers.size());
+		for (auto& lay : Katana::Instance().layers) {
+			slicer_cgal(Kernel::Plane_3(0, 0, -1, lay.z), std::back_inserter(layer_polylines[&lay - &Katana::Instance().layers[0]]));
+		}
+
+		Visualize_layer_polylines(layer_polylines);
+	}
+
 	Katana::Instance().gcode.write(all_slice_points, all_slice_points_contain);	//katana分层并得到边界轮廓
+
+
+
 	clock_t end_time_6 = clock();
 	slicing_time += double(end_time_6 - start_time_6) / CLOCKS_PER_SEC;
 	/////////////////////////////////////

@@ -33,6 +33,44 @@ void Layer_Graph::creat_ball(string file_name, std::vector<Eigen::MatrixXd> vis_
 	}
 }
 
+void Layer_Graph::GetTrianglesForLayersFromMesh(
+	const std::vector<std::vector<std::vector<int>>>& contour_face_ids,
+	const std::vector<Eigen::Vector3d>& face_normals,
+	const Eigen::Vector3d& vectorAfter,
+	int height_of_beam_search,
+	int id_continue)
+{
+	is_the_layer_self_suppot.resize(total_node_num);
+	int cont_num = 0;
+	all_triangles_of_layers.resize(total_node_num);
+	const Eigen::Vector3d base_normal(0, 0, 1);
+
+	for (int i = 0; i < contour_face_ids.size(); i++) {
+		for (int j = 0; j < contour_face_ids[i].size(); j++) {
+			is_the_layer_self_suppot[cont_num] = true;
+			int cont_not_set_support = 0;
+			const auto& face_ids = contour_face_ids[i][j];
+			for (int k = 0; k < face_ids.size(); k++) {
+				int face_id = face_ids[k];
+				if (face_id < 0 || face_id >= face_normals.size()) {
+					continue;
+				}
+				const Eigen::Vector3d& face_normal = face_normals[face_id];
+				bool jud_self_support = (face_normal.dot(base_normal) + sin(PI / 3.6) >= 0);
+				if (!jud_self_support) {
+					cont_not_set_support++;
+				}
+			}
+			if (!face_ids.empty()) {
+				if (double(cont_not_set_support) / double(face_ids.size()) > 0.2) {
+					is_the_layer_self_suppot[cont_num] = false;
+				}
+			}
+			cont_num++;
+		}
+	}
+}
+
 
 void Layer_Graph::GetTrianglesForLayers(vector<vector<vector<Vertex>>> all_slice_points, std::vector<map<pair<Vertex, Vertex>, Triangle*>> map_segment_triangles, vector<Vertex> all_vertex, Eigen::Vector3d vectorAfter, int height_of_beam_search, int id_continue)
 {	is_the_layer_self_suppot.resize(total_node_num);

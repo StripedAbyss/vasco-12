@@ -55,6 +55,12 @@ public:
 	Layer_Graph(const Data& data);
 	~Layer_Graph();
 	void GetTrianglesForLayers(vector<vector<vector<Vertex>>> all_slice_points, std::vector<map<pair<Vertex, Vertex>, Triangle*>> map_segment_triangles, vector<Vertex> all_vertex, Eigen::Vector3d vectorAfter, int height_of_beam_search, int id_continue);
+	void GetTrianglesForLayersFromMesh(
+		const std::vector<std::vector<std::vector<int>>>& contour_face_ids,
+		const std::vector<Eigen::Vector3d>& face_normals,
+		const Eigen::Vector3d& vectorAfter,
+		int height_of_beam_search,
+		int id_continue);
 	void GenerateDependencyEdges();
 	void BuildLayerGraph(nozzle the_nozzle);
     void BuildDependencyGraph(std::vector<Eigen::Vector3d>& all_points);

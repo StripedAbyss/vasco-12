@@ -106,7 +106,7 @@ int main()
 		Katana::Instance().stl.saveStlFromObj(file_name +"-0_0" + ".stl", V, F);
 		igl::writeOBJ(file_name + "-0_0" + ".obj", V, F); //新加的语句，加了以后beamsearch缺的obj补上了
 		HybridManufacturing HybridManufacturing(file_name, suff,V, F, N);
-		HybridManufacturing.open_vis_voronoi = 1;
+		HybridManufacturing.open_vis_voronoi = 0;
 		HybridManufacturing.open_vis_red_points = 0;
 		HybridManufacturing.open_vis_green_points = 0;
 		HybridManufacturing.open_vis_stair_case = 0;

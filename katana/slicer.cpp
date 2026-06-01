@@ -590,8 +590,9 @@ void Slicer::buildSegments(vector<Vertex> ori_space_points, std::map<int, int> i
     //VV.generateModelForRendering_4(real_path, "..\\model\\" + mapping_file_name + "_path.obj");
 }
 
-void Slicer::buildSegments()
+bool Slicer::buildSegments()
 {
+    bool result = true;
     // we try to build closed loops of sements for efficient printing
     Katana::Instance().map_segment_triangles.clear();
     Katana::Instance().map_segment_triangles.resize(Katana::Instance().layers.size());
@@ -732,6 +733,8 @@ void Slicer::buildSegments()
         }
 
         if (has_non_manifold_segments) {
+			result = false;
+
 
             std::vector <Triangle> triangles_for_debug;
             for (auto tri : layer.triangles) {
@@ -802,4 +805,5 @@ void Slicer::buildSegments()
         std::sort(layer.segments.begin(), layer.segments.end());
     }
 
+	return result;
 }

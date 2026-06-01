@@ -36,6 +36,8 @@
 
 #include <CGAL/Exact_predicates_inexact_constructions_kernel.h>
 #include <CGAL/Surface_mesh.h>
+
+#include <CGAL/Surface_mesh_deformation.h>
 #include <CGAL/convex_hull_2.h>
 #include <CGAL/Convex_hull_traits_adapter_2.h>
 #include <CGAL/property_map.h>
@@ -67,11 +69,18 @@
 #include "polyscope/polyscope.h"
 #include "polyscope/surface_mesh.h"
 
+
+
 using namespace std;
 
 using Kernel = CGAL::Exact_predicates_inexact_constructions_kernel;
 using Point_3 = Kernel::Point_3;
 using SurfaceMesh = CGAL::Surface_mesh<Point_3>;
+using SurfaceMeshDeform = CGAL::Surface_mesh_deformation<SurfaceMesh>;
+
+typedef std::vector<Kernel::Point_3> Polyline_type;
+typedef std::vector<Polyline_type> Polylines;
+
 
 #include "vasco/core/Constants.h"
 #include "vasco/core/Types.h"
@@ -227,7 +236,6 @@ public:
 		vector<bool> judge_covering_points_be_searched,
 		bool& jud_admit);
 	//vector<vector<vector<cv::Point3d>>> DFS_search(Layer_Graph layer_graph, vector<vector<int>>& final_pathes_include_S, vector<vector<int>>& final_pathes_include_sample_points, vector<bool> judge_S_be_searched, vector<vector<int>>& all_cut_layers, vector<vector<int>>& all_cut_layers_dependency_layer, vector<vector<int>>& final_paths_include_covering_points, vector<bool> judge_covering_points_be_searched, vector<vector<area_S>> ori_all_the_covering_points);
-	// pre_tree_nodes 参数已移除，统一使用 tree_entries。
 	void sort_candidate_nodes(
 		vector<int>& candidate_nodes,
 		const vector<BeamTreeEntry>& tree_entries,
@@ -382,11 +390,67 @@ private:
 		int id_continue,
 		const Eigen::Vector3d& vector_after) const;
 
+	void Visualize_layer_segments(const std::vector<Layer>& layers) const;
+	void Visualize_layer_polylines(const std::vector<Polylines>& layer_polylines) const;
+
+	struct LocalSlicingData {
+		std::vector<Vertex> vertices;
+		std::vector<Triangle> triangles;
+		std::vector<Layer> layers;
+		std::vector<std::map<std::pair<Vertex, Vertex>, Triangle*>> map_segment_triangles;
+		float min_z = 0.0f;
+	};
+
+	LocalSlicingData BuildLocalSlicingDataFromRotatedMesh() const;
+	void LocalBuildLayers(LocalSlicingData& slicing_data) const;
+	bool LocalBuildSegments(LocalSlicingData& slicing_data) const;
+	void LocalWriteSlicePoints(
+		LocalSlicingData& slicing_data,
+		std::vector<std::vector<std::vector<Vertex>>>& all_slice_points,
+		std::vector<std::vector<std::vector<Vertex>>>& all_slice_points_contain) const;
+	Layer_Graph BuildAdditiveLayerGraphWithLocalSlicer(
+		const Eigen::Vector3d& vector_after,
+		int height_of_beam_search,
+		int continue_node_id,
+		const nozzle& the_nozzle,
+		double& slicing_time,
+		double& graph_time) const;
+
+public:
+	struct SurfaceMeshSliceSegment {
+		Point_3 start;
+		Point_3 end;
+		int face_id = -1;
+	};
+
+	struct SurfaceMeshSliceData {
+		std::vector<double> layer_z_values;
+		std::vector<std::vector<SurfaceMeshSliceSegment>> layer_segments;
+		std::vector<std::vector<std::vector<Vertex>>> all_slice_points;
+		std::vector<std::vector<std::vector<Vertex>>> all_slice_points_contain;
+		std::vector<std::vector<std::vector<int>>> contour_face_ids;
+		std::vector<Eigen::Vector3d> face_normals;
+	};
+
+	SurfaceMeshSliceData BuildSurfaceMeshSlices() const;
+	void BuildSurfaceMeshContours(
+		SurfaceMeshSliceData& slice_data,
+		double merge_tolerance = 1e-6) const;
+	Layer_Graph BuildAdditiveLayerGraphWithSurfaceMesh(
+		const Eigen::Vector3d& vector_after,
+		int height_of_beam_search,
+		int continue_node_id,
+		const nozzle& the_nozzle,
+		double& slicing_time,
+		double& graph_time) const;
+
 private:
 	Eigen::MatrixXd V;
 	std::vector<Eigen::MatrixXd> V_2;
 	Eigen::MatrixXi F;
 	SurfaceMesh input_mesh;
+	SurfaceMesh current_node_mesh;
+	SurfaceMesh current_node_mesh_rotated;
 	Eigen::MatrixXd Normals;
 	std::vector<Eigen::Vector3d> V_bottom;              // 仍使用
 	std::vector<VoronoiCell> all_voronoi_cells; // 类型改为命名空间版本

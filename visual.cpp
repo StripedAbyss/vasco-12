@@ -291,7 +291,7 @@ void Visual::generateModelForRendering_8(vector<vector<Eigen::Vector3d>> lines, 
 
 void Visual::generateModelForRendering_9(vector<vector<cv::Point3d>> lines, string file_name)
 {
-    float radius = 0.3;
+    float radius = 0.05;
     General_Mesh mesh1;
     mesh1.r = 0.7;
     mesh1.g = 0.15;

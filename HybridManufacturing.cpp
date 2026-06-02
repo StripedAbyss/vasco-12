@@ -116,95 +116,222 @@ namespace
 	}
 }
 
-HybridManufacturing::SurfaceMeshSliceData HybridManufacturing::BuildSurfaceMeshSlices() const
+void HybridManufacturing::BuildSurfaceMeshSlices(std::vector<SurfaceMeshSliceData>& slices) const
 {
-	SurfaceMeshSliceData slice_data;
+	slices.clear();
 	const double layer_height_value = Katana::Instance().config.get("layer_height");
 	if (layer_height_value <= 0) {
-		return slice_data;
+		return;
 	}
 
-	std::vector<Eigen::Vector3d> face_normals;
-	face_normals.reserve(current_node_mesh_rotated.number_of_faces());
-	std::map<SurfaceMesh::Face_index, int> face_index_map;
-	int face_id = 0;
-	for (auto face : current_node_mesh_rotated.faces()) {
-		auto halfedge = current_node_mesh_rotated.halfedge(face);
-		auto v0 = current_node_mesh_rotated.target(halfedge);
-		auto v1 = current_node_mesh_rotated.target(current_node_mesh_rotated.next(halfedge));
-		auto v2 = current_node_mesh_rotated.target(current_node_mesh_rotated.next(current_node_mesh_rotated.next(halfedge)));
-		const auto& p0 = current_node_mesh_rotated.point(v0);
-		const auto& p1 = current_node_mesh_rotated.point(v1);
-		const auto& p2 = current_node_mesh_rotated.point(v2);
-		Eigen::Vector3d e1(p1.x() - p0.x(), p1.y() - p0.y(), p1.z() - p0.z());
-		Eigen::Vector3d e2(p2.x() - p0.x(), p2.y() - p0.y(), p2.z() - p0.z());
-		Eigen::Vector3d normal = e1.cross(e2);
-		if (normal.norm() > 0.0) {
-			normal.normalize();
-		}
-		face_normals.push_back(normal);
-		face_index_map[face] = face_id++;
-	}
-	slice_data.face_normals = face_normals;
+	//std::vector<Eigen::Vector3d> face_normals;
+	//face_normals.reserve(current_node_mesh_rotated.number_of_faces());
+	//int face_id = 0;
+	//for (auto face : current_node_mesh_rotated.faces()) {
+	//	auto halfedge = current_node_mesh_rotated.halfedge(face);
+	//	auto v0 = current_node_mesh_rotated.target(halfedge);
+	//	auto v1 = current_node_mesh_rotated.target(current_node_mesh_rotated.next(halfedge));
+	//	auto v2 = current_node_mesh_rotated.target(current_node_mesh_rotated.next(current_node_mesh_rotated.next(halfedge)));
+	//	const auto& p0 = current_node_mesh_rotated.point(v0);
+	//	const auto& p1 = current_node_mesh_rotated.point(v1);
+	//	const auto& p2 = current_node_mesh_rotated.point(v2);
+	//	Eigen::Vector3d e1(p1.x() - p0.x(), p1.y() - p0.y(), p1.z() - p0.z());
+	//	Eigen::Vector3d e2(p2.x() - p0.x(), p2.y() - p0.y(), p2.z() - p0.z());
+	//	Eigen::Vector3d normal = e1.cross(e2);
+	//	if (normal.norm() > 0.0) {
+	//		normal.normalize();
+	//	}
+	//	face_normals.push_back(normal);
+	//}
+	//slice_data.face_normals = face_normals;
 
-	double min_z = std::numeric_limits<double>::max();
-	double max_z = -std::numeric_limits<double>::max();
+
+	std::vector<SurfaceMesh::Vertex_index> vi_z_sorted;
+	vi_z_sorted.reserve(current_node_mesh_rotated.number_of_vertices());
 	for (auto v : current_node_mesh_rotated.vertices()) {
-		const auto& point = current_node_mesh_rotated.point(v);
-		min_z = std::min(min_z, point.z());
-		max_z = std::max(max_z, point.z());
+		vi_z_sorted.push_back(v);
 	}
-	if (min_z >= max_z) {
-		return slice_data;
-	}
+	std::sort(vi_z_sorted.begin(), vi_z_sorted.end(), [&](const SurfaceMesh::Vertex_index& a, const SurfaceMesh::Vertex_index& b) {
+		return current_node_mesh_rotated.point(a).z() < current_node_mesh_rotated.point(b).z();
+		});
 
-	for (double z = min_z + layer_height_value; z <= max_z + 1e-6; z += layer_height_value) {
-		slice_data.layer_z_values.push_back(z);
-	}
-	slice_data.layer_segments.resize(slice_data.layer_z_values.size());
+	std::map<SurfaceMesh::Face_index, int> activeTriangles;
 
-	for (size_t layer_index = 0; layer_index < slice_data.layer_z_values.size(); ++layer_index) {
-		double z = slice_data.layer_z_values[layer_index];
-		auto& layer_segments = slice_data.layer_segments[layer_index];
-		for (auto face : current_node_mesh_rotated.faces()) {
-			auto halfedge = current_node_mesh_rotated.halfedge(face);
-			std::array<Point_3, 3> points;
-			int count = 0;
-			for (auto he : CGAL::halfedges_around_face(halfedge, current_node_mesh_rotated)) {
-				points[count++] = current_node_mesh_rotated.point(current_node_mesh_rotated.target(he));
-				if (count >= 3) {
-					break;
-				}
-			}
-			if (count < 3) {
+	double min_z = current_node_mesh_rotated.point(vi_z_sorted.front()).z();
+	double layer_z = min_z + layer_height_value;
+	int layer_height_adjust_count = 0;
+	for (auto vi : vi_z_sorted) {
+		double vi_z = current_node_mesh_rotated.point(vi).z();
+		const auto& point = current_node_mesh_rotated.point(vi);
+		std::cout << "vi: " << vi << " z: " << vi_z << std::endl;
+
+		while (layer_z <= vi_z) {
+			if (vi_z - layer_z < layer_vertex_threshold) {
+				layer_z += small_layer_height;
+				++layer_height_adjust_count;
+				std::cout << "Adjusting layer height for vertex at z = " << vi_z << " layer_height_adjust_count: " << layer_height_adjust_count << std::endl;
 				continue;
 			}
-			std::vector<Point_3> intersections;
-			for (int e = 0; e < 3; ++e) {
-				const auto& p0 = points[e];
-				const auto& p1 = points[(e + 1) % 3];
-				if ((p0.z() <= z && p1.z() >= z) || (p1.z() <= z && p0.z() >= z)) {
-					if (p0.z() == p1.z()) {
-						continue;
-					}
-					double t = (z - p0.z()) / (p1.z() - p0.z());
-					Point_3 p(p0.x() + (p1.x() - p0.x()) * t,
-						p0.y() + (p1.y() - p0.y()) * t,
-						z);
-					intersections.push_back(p);
+
+
+			SurfaceMeshSliceData slice_data;
+			if (!BuildSurfaceMeshSingleSlice(activeTriangles, slice_data, layer_z)) {
+				layer_z += small_layer_height;
+				++layer_height_adjust_count;
+				std::cout << "Adjusting layer height for vertex at z = " << vi_z << " layer_height_adjust_count: " << layer_height_adjust_count << std::endl;
+				continue;
+			}
+
+			// build slice successfully
+			layer_height_adjust_count = 0;
+			if (slice_data.contour_points.empty()) {
+				std::cout << "empty slice at z = " << layer_z << std::endl;
+			}
+			else {
+				slices.push_back(std::move(slice_data));
+			}
+			layer_z += layer_height_value;
+		}
+
+		// Update activeTriangles
+		auto hf_vi = current_node_mesh_rotated.halfedge(vi);
+		for (auto hf : current_node_mesh_rotated.halfedges_around_target(hf_vi)) {
+			auto face_index = current_node_mesh_rotated.face(hf);
+			if (face_index == SurfaceMesh::null_face()) {
+				std::cout << "[HybridManufacturing::BuildSurfaceMeshSlices] Vertex " << vi << " has a halfedge with null face." << std::endl;
+				continue;
+			}
+			auto active_it = activeTriangles.find(face_index);
+			if (active_it == activeTriangles.end()) {
+				activeTriangles[face_index] = 1;
+			}
+			else {
+				active_it->second += 1;
+				if (active_it->second == 3) {
+					activeTriangles.erase(active_it);
 				}
 			}
-			if (intersections.size() == 2) {
-				SurfaceMeshSliceSegment seg;
-				seg.start = intersections[0];
-				seg.end = intersections[1];
-				seg.face_id = face_index_map[face];
-				layer_segments.push_back(seg);
+		}
+
+	}
+	if (activeTriangles.size() > 0) {
+		std::cout << "[HybridManufacturing::BuildSurfaceMeshSlices] Warning: " << activeTriangles.size() << " active triangles remain after processing all vertices." << std::endl;
+	}
+}
+
+bool HybridManufacturing::BuildSurfaceMeshSingleSlice(std::map<SurfaceMesh::Face_index, int>& activeTriangles, SurfaceMeshSliceData& slice_data, double layer_z) const
+{
+	if (activeTriangles.empty()) {
+		return true;
+	}
+
+	std::vector<bool> face_visited(activeTriangles.size(), false);
+	std::vector<SurfaceMesh::Face_index> active_face_indices;
+	active_face_indices.reserve(activeTriangles.size());
+	std::unordered_map<SurfaceMesh::Face_index, int> face_index_to_active_index;
+	for (auto active_triangle : activeTriangles) {
+		const auto& face_index = active_triangle.first;
+		active_face_indices.push_back(face_index);
+		face_index_to_active_index[face_index] = active_face_indices.size() - 1;
+	}
+
+	for (size_t i = 0; i < active_face_indices.size(); ++i) {
+		if (face_visited[i]) {
+			continue;
+		}
+		const auto start_face_index = active_face_indices[i];
+
+		// Check if the face has vertices close to the slicing plane
+		auto hf = current_node_mesh_rotated.halfedge(start_face_index);
+		for (int j = 0; j < 3; j++) {
+			auto v = current_node_mesh_rotated.target(hf);
+			const auto& p = current_node_mesh_rotated.point(v);
+			if (std::abs(p.z() - layer_z) < layer_vertex_threshold) {
+				return false;
 			}
+			hf = current_node_mesh_rotated.next(hf);
+		}
+		if (hf != current_node_mesh_rotated.halfedge(start_face_index)) {
+			std::cout << "[HybridManufacturing::BuildSurfaceMeshSingleSlice] Face " << start_face_index << " does not have 3 vertices." << std::endl;
+			return false;
+		}
+
+		// Find the intersection of the face with the slicing plane
+		bool intersected = false;
+		for (int j = 0; j < 3; j++) {
+			auto v0 = current_node_mesh_rotated.source(hf);
+			auto v1 = current_node_mesh_rotated.target(hf);
+			const auto& p0 = current_node_mesh_rotated.point(v0);
+			const auto& p1 = current_node_mesh_rotated.point(v1);
+			if (!(p0.z() < layer_z && p1.z() > layer_z)) {
+				hf = current_node_mesh_rotated.next(hf);
+				continue;
+			}
+			intersected = true;
+			Point_3 intersection_point = p0 + (layer_z - p0.z()) / (p1.z() - p0.z()) * (p1 - p0);
+			slice_data.contour_points.push_back(Polyline_type{ intersection_point });
+			slice_data.contour_face_ids.push_back({ start_face_index });
+			slice_data.contour_contain_next_id.push_back(-1);
+			slice_data.layer_z = layer_z;
+
+			break;
+		}
+
+		if (!intersected) {
+			std::cout << "[HybridManufacturing::BuildSurfaceMeshSingleSlice] Face " << start_face_index << " does not intersect with the slicing plane." << std::endl;
+			return false;
+		}
+
+		face_visited[i] = true;
+
+		const auto start_halfedge = hf;
+
+		hf = current_node_mesh_rotated.opposite(hf);
+		while (current_node_mesh_rotated.face(hf) != start_face_index) {
+			// Find the intersection of the face with the slicing plane
+			bool intersected = false;
+			for (int j = 0; j < 2; j++) {
+				hf = current_node_mesh_rotated.next(hf);
+				auto v0 = current_node_mesh_rotated.source(hf);
+				auto v1 = current_node_mesh_rotated.target(hf);
+				const auto& p0 = current_node_mesh_rotated.point(v0);
+				const auto& p1 = current_node_mesh_rotated.point(v1);
+				if (!(p0.z() < layer_z && p1.z() > layer_z)) {
+					continue;
+				}
+				intersected = true;
+				Point_3 intersection_point = p0 + (layer_z - p0.z()) / (p1.z() - p0.z()) * (p1 - p0);
+				auto face_index = current_node_mesh_rotated.face(hf);
+				auto active_index_it = face_index_to_active_index.find(face_index);
+
+				if (active_index_it == face_index_to_active_index.end()) {
+					std::cout << "[HybridManufacturing::BuildSurfaceMeshSingleSlice] Face " << face_index << " is not in activeTriangles." << std::endl;
+					return false;
+				}
+				if (face_visited[active_index_it->second]) {
+					std::cout << "[HybridManufacturing::BuildSurfaceMeshSingleSlice] Face " << face_index << " has already been visited." << std::endl;
+					return false;
+				}
+				face_visited[active_index_it->second] = true;
+
+
+				slice_data.contour_points.back().push_back(intersection_point);
+				slice_data.contour_face_ids.back().push_back(face_index);
+
+				break;
+			}
+
+			if (!intersected) {
+				std::cout << "[HybridManufacturing::BuildSurfaceMeshSingleSlice] Face " << start_face_index << " does not intersect with the slicing plane." << std::endl;
+				return false;
+			}
+
+			hf = current_node_mesh_rotated.opposite(hf);
 		}
 	}
 
-	return slice_data;
+	//TODO: add contain relationship between contours
+	return true;
 }
 
 namespace
@@ -219,104 +346,6 @@ namespace
 	inline bool PointsClose(const Point_3& a, const Point_3& b, double tol)
 	{
 		return PointDistance2D(a, b) <= tol;
-	}
-}
-
-void HybridManufacturing::BuildSurfaceMeshContours(
-	SurfaceMeshSliceData& slice_data,
-	double merge_tolerance) const
-{
-	slice_data.all_slice_points.clear();
-	slice_data.all_slice_points_contain.clear();
-	slice_data.contour_face_ids.clear();
-	const double tolerance = merge_tolerance <= 0 ? 1e-6 : merge_tolerance;
-
-	for (size_t layer_index = 0; layer_index < slice_data.layer_segments.size(); ++layer_index) {
-		const auto& segments = slice_data.layer_segments[layer_index];
-		slice_data.all_slice_points.emplace_back();
-		slice_data.all_slice_points_contain.emplace_back();
-		slice_data.contour_face_ids.emplace_back();
-		auto& layer_points = slice_data.all_slice_points.back();
-		auto& layer_points_contain = slice_data.all_slice_points_contain.back();
-		auto& layer_face_ids = slice_data.contour_face_ids.back();
-
-		std::vector<bool> used(segments.size(), false);
-		for (size_t i = 0; i < segments.size(); ++i) {
-			if (used[i]) {
-				continue;
-			}
-			std::vector<Vertex> polyline;
-			std::vector<int> polyline_face_ids;
-			Point_3 start = segments[i].start;
-			Point_3 end = segments[i].end;
-			used[i] = true;
-			polyline.emplace_back(static_cast<float>(start.x()), static_cast<float>(start.y()), static_cast<float>(start.z()));
-			polyline.emplace_back(static_cast<float>(end.x()), static_cast<float>(end.y()), static_cast<float>(end.z()));
-			polyline_face_ids.push_back(segments[i].face_id);
-
-			bool extended = true;
-			while (extended) {
-				extended = false;
-				for (size_t j = 0; j < segments.size(); ++j) {
-					if (used[j]) {
-						continue;
-					}
-					const auto& seg = segments[j];
-					if (PointsClose(seg.start, end, tolerance)) {
-						end = seg.end;
-						polyline.emplace_back(static_cast<float>(end.x()), static_cast<float>(end.y()), static_cast<float>(end.z()));
-						polyline_face_ids.push_back(seg.face_id);
-						used[j] = true;
-						extended = true;
-						break;
-					}
-					if (PointsClose(seg.end, end, tolerance)) {
-						end = seg.start;
-						polyline.emplace_back(static_cast<float>(end.x()), static_cast<float>(end.y()), static_cast<float>(end.z()));
-						polyline_face_ids.push_back(seg.face_id);
-						used[j] = true;
-						extended = true;
-						break;
-					}
-				}
-			}
-
-			if (polyline.size() >= 2) {
-				layer_points.push_back(polyline);
-				layer_points_contain.push_back(std::vector<Vertex>());
-				layer_face_ids.push_back(polyline_face_ids);
-			}
-		}
-
-		for (int j = 0; j < layer_points.size(); j++) {
-			layer_points_contain[j].clear();
-		}
-		for (int j = 0; j < layer_points.size(); j++) {
-			Point* points = new Point[layer_points[j].size()];
-			for (int m = 0; m < layer_points[j].size(); m++) {
-				Point temp_point(layer_points[j][m].x, layer_points[j][m].y);
-				points[m] = temp_point;
-			}
-			for (int k = 0; k < layer_points.size(); k++) {
-				bool jud_contain = true;
-				for (int m = 0; m < layer_points[k].size(); m++) {
-					if (!LocalCheckInside(Point(layer_points[k][m].x, layer_points[k][m].y), points, points + layer_points[j].size()))
-						jud_contain = false;
-				}
-				if (jud_contain) {
-					layer_points_contain[j] = layer_points[k];
-					layer_points.erase(layer_points.begin() + k);
-					layer_points_contain.erase(layer_points_contain.begin() + k);
-					layer_face_ids.erase(layer_face_ids.begin() + k);
-					if (j >= 1)
-						j -= 2;
-					else
-						j--;
-					break;
-				}
-			}
-			delete[] points;
-		}
 	}
 }
 
@@ -1759,27 +1788,37 @@ Layer_Graph HybridManufacturing::BuildAdditiveLayerGraphWithSurfaceMesh(
 	double& graph_time) const
 {
 	clock_t start_time_6 = clock();
-	SurfaceMeshSliceData slice_data = BuildSurfaceMeshSlices();
-	BuildSurfaceMeshContours(slice_data);
+	std::vector<SurfaceMeshSliceData> slices;
+	BuildSurfaceMeshSlices(slices);
+	//BuildSurfaceMeshContours(slice_data);
 
 	clock_t end_time_6 = clock();
 	slicing_time += double(end_time_6 - start_time_6) / CLOCKS_PER_SEC;
 
+	std::vector<Polylines> contours;
+	for (const auto& slice : slices) {
+		contours.push_back(slice.contour_points);
+		for (auto& contour : contours.back()) {
+			contour.push_back(contour.front());
+		}
+	}
+	Visualize_layer_polylines(contours);
+
 	std::vector<Data> data;
 	data.resize(1);
-	data[0].ReadData(slice_data.all_slice_points, slice_data.all_slice_points_contain);
+	//data[0].ReadData(slice_data.all_slice_points, slice_data.all_slice_points_contain);
 	Layer_Graph layer_graph(data[0]);
-	clock_t start_time_4 = clock();
-	layer_graph.GetTrianglesForLayersFromMesh(
-		slice_data.contour_face_ids,
-		slice_data.face_normals,
-		vector_after,
-		height_of_beam_search,
-		continue_node_id);
-	layer_graph.GenerateDependencyEdges();
-	layer_graph.CollisionDetectionForAdditiveManufacturing(the_nozzle);
-	clock_t end_time_4 = clock();
-	graph_time += double(end_time_4 - start_time_4) / CLOCKS_PER_SEC;
+	//clock_t start_time_4 = clock();
+	//layer_graph.GetTrianglesForLayersFromMesh(
+	//	slice_data.contour_face_ids,
+	//	slice_data.face_normals,
+	//	vector_after,
+	//	height_of_beam_search,
+	//	continue_node_id);
+	//layer_graph.GenerateDependencyEdges();
+	//layer_graph.CollisionDetectionForAdditiveManufacturing(the_nozzle);
+	//clock_t end_time_4 = clock();
+	//graph_time += double(end_time_4 - start_time_4) / CLOCKS_PER_SEC;
 
 	return layer_graph;
 }
@@ -4235,6 +4274,17 @@ void HybridManufacturing::outer_beam_search(nozzle the_nozzle, cutter cutting_to
 			if (!PrepareOrientationSliceData(sampling, ori, now_last_node, save_ori, rotMatrix, vectorAfter)) {
 				continue;
 			}
+
+			double temp_time_1 = 0;
+			double temp_time_2 = 0;
+			BuildAdditiveLayerGraphWithSurfaceMesh(
+				vectorAfter,
+				height_of_beam_search,
+				tree_entries[now_last_node].continue_id,
+				the_nozzle,
+				temp_time_1,
+				temp_time_2);
+
 			Layer_Graph layer_graph = BuildAdditiveLayerGraph(
 				vectorAfter,
 				height_of_beam_search,
@@ -4741,7 +4791,7 @@ Layer_Graph HybridManufacturing::BuildAdditiveLayerGraph(
 
 
 	bool segments_manifold = Katana::Instance().slicer.buildSegments();
-	if (!segments_manifold) {
+	if (!false) {
 		std::cout << "[HybridManufacturing::BuildAdditiveLayerGraph] !segments_manifold" << std::endl;
 		Visualize_layer_segments(Katana::Instance().layers);
 

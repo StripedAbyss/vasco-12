@@ -417,6 +417,10 @@ private:
 		double& graph_time) const;
 
 public:
+
+	const double layer_vertex_threshold = 1e-4;
+	const double small_layer_height = 1e-2;
+
 	struct SurfaceMeshSliceSegment {
 		Point_3 start;
 		Point_3 end;
@@ -424,18 +428,18 @@ public:
 	};
 
 	struct SurfaceMeshSliceData {
-		std::vector<double> layer_z_values;
-		std::vector<std::vector<SurfaceMeshSliceSegment>> layer_segments;
-		std::vector<std::vector<std::vector<Vertex>>> all_slice_points;
-		std::vector<std::vector<std::vector<Vertex>>> all_slice_points_contain;
-		std::vector<std::vector<std::vector<int>>> contour_face_ids;
+		Polylines contour_points;
+		std::vector<int> contour_contain_next_id;
+		std::vector<std::vector<SurfaceMesh::Face_index>> contour_face_ids;
+		double layer_z = 0.0;
 		std::vector<Eigen::Vector3d> face_normals;
 	};
 
-	SurfaceMeshSliceData BuildSurfaceMeshSlices() const;
-	void BuildSurfaceMeshContours(
+	void BuildSurfaceMeshSlices(std::vector<SurfaceMeshSliceData>& slices) const;
+	bool BuildSurfaceMeshSingleSlice(
+		std::map<SurfaceMesh::Face_index, int> &activeTriangles,
 		SurfaceMeshSliceData& slice_data,
-		double merge_tolerance = 1e-6) const;
+		double layer_z) const;
 	Layer_Graph BuildAdditiveLayerGraphWithSurfaceMesh(
 		const Eigen::Vector3d& vector_after,
 		int height_of_beam_search,

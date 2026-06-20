@@ -113,7 +113,7 @@ int main()
 
 		HybridManufacturing.open_change_orientation = 0;
 
-		//HybridManufacturing.subtractive_accessibility_decomposition_global(4,cutting_tool);
+		//HybridManufacturing.subtractive_accessibility_decomposition_global(5,cutting_tool);
 		//return 0;
 
 		// Ìæ»»Ô­À´µÄ HybridManufacturing.GetVoronoiCells1();

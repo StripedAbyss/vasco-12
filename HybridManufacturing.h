@@ -1,6 +1,28 @@
 #pragma once
 #ifndef HYBRIDMANUFACTURING_H_
 #define HYBRIDMANUFACTURING_H_
+
+#include <CGAL/Exact_predicates_inexact_constructions_kernel.h>
+#include <CGAL/Surface_mesh.h>
+
+#include <CGAL/Surface_mesh_deformation.h>
+#include <CGAL/convex_hull_2.h>
+#include <CGAL/Convex_hull_traits_adapter_2.h>
+#include <CGAL/property_map.h>
+#include <CGAL/Triangulation_vertex_base_2.h>
+#include <CGAL/Triangulation_data_structure_2.h>
+#include <CGAL/Triangulation_face_base_with_info_2.h>
+#include <CGAL/Constrained_triangulation_face_base_2.h>
+#include <CGAL/mark_domain_in_triangulation.h>
+//#include <CGAL/boost/graph/IO/OBJ.h>
+//#include <CGAL/boost/graph/IO/STL.h>
+//#include <CGAL/intersections.h>
+//#include <CGAL/Cartesian.h>
+#include <CGAL/Polygon_2.h>
+#include <CGAL/Polygon_2_algorithms.h>
+#include <CGAL/draw_polygon_2.h>
+#include <CGAL/Polygon_mesh_slicer.h>
+
 #include "polygon.h"
 #include "Mygraph.h"
 #include "data.h"
@@ -34,15 +56,6 @@
 #include <string.h>
 #include <time.h>
 
-#include <CGAL/Exact_predicates_inexact_constructions_kernel.h>
-#include <CGAL/Surface_mesh.h>
-
-#include <CGAL/Surface_mesh_deformation.h>
-#include <CGAL/convex_hull_2.h>
-#include <CGAL/Convex_hull_traits_adapter_2.h>
-#include <CGAL/property_map.h>
-//#include <CGAL/boost/graph/IO/OBJ.h>
-//#include <CGAL/boost/graph/IO/STL.h>
 #include <vector>
 #include <numeric>
 #include"PolygonIntersection.h"
@@ -57,29 +70,18 @@
 #include <ranges>
 //#include"Point3f.h"
 
-//#include <CGAL/intersections.h>
-//#include <CGAL/Cartesian.h>
-#include <CGAL/Polygon_2.h>
-#include <CGAL/Polygon_2_algorithms.h>
-#include <CGAL/draw_polygon_2.h>
-#include <CGAL/Polygon_mesh_slicer.h>
-#include <iostream>
+
 #include"earcut.hpp"
+#include <iostream>
+
+#include "surface_mesh_slice_data.h"
 
 #include "polyscope/polyscope.h"
 #include "polyscope/surface_mesh.h"
 
 
 
-using namespace std;
-
-using Kernel = CGAL::Exact_predicates_inexact_constructions_kernel;
-using Point_3 = Kernel::Point_3;
-using SurfaceMesh = CGAL::Surface_mesh<Point_3>;
 using SurfaceMeshDeform = CGAL::Surface_mesh_deformation<SurfaceMesh>;
-
-typedef std::vector<Kernel::Point_3> Polyline_type;
-typedef std::vector<Polyline_type> Polylines;
 
 
 #include "vasco/core/Constants.h"
@@ -158,6 +160,14 @@ public:
 
 	HybridManufacturing(std::string file_name, std::string suf, Eigen::MatrixXd V, Eigen::MatrixXi F, Eigen::MatrixXd Normals);
 	~HybridManufacturing();
+
+	enum class ContactFaceTriangulationMode {
+		Earcut,
+		CGALRemesh
+	};
+
+	void SetContactFaceTriangulationMode(ContactFaceTriangulationMode mode);
+	ContactFaceTriangulationMode GetContactFaceTriangulationMode() const;
 
 	//void GetVoronoiCells();              // 原函数保留
 	//void GetVoronoiCells1();          // 移除声明
@@ -392,48 +402,23 @@ private:
 
 	void Visualize_layer_segments(const std::vector<Layer>& layers) const;
 	void Visualize_layer_polylines(const std::vector<Polylines>& layer_polylines) const;
-
-	struct LocalSlicingData {
-		std::vector<Vertex> vertices;
-		std::vector<Triangle> triangles;
-		std::vector<Layer> layers;
-		std::vector<std::map<std::pair<Vertex, Vertex>, Triangle*>> map_segment_triangles;
-		float min_z = 0.0f;
-	};
-
-	LocalSlicingData BuildLocalSlicingDataFromRotatedMesh() const;
-	void LocalBuildLayers(LocalSlicingData& slicing_data) const;
-	bool LocalBuildSegments(LocalSlicingData& slicing_data) const;
-	void LocalWriteSlicePoints(
-		LocalSlicingData& slicing_data,
-		std::vector<std::vector<std::vector<Vertex>>>& all_slice_points,
-		std::vector<std::vector<std::vector<Vertex>>>& all_slice_points_contain) const;
-	Layer_Graph BuildAdditiveLayerGraphWithLocalSlicer(
-		const Eigen::Vector3d& vector_after,
-		int height_of_beam_search,
-		int continue_node_id,
-		const nozzle& the_nozzle,
-		double& slicing_time,
-		double& graph_time) const;
+	std::vector<TRiangle> BuildContactFaceTrianglesEarcut(
+		const std::vector<std::vector<int>>& real_cutting_plane_triangles,
+		const std::vector<int>& flag_cut_layers_is_hole,
+		const std::map<int, int>& follow_index,
+		Slicer_2& all_slicer,
+		std::vector<int>& id_contact_faces) const;
+	std::vector<TRiangle> BuildContactFaceTrianglesCGAL(
+		const std::vector<std::vector<int>>& real_cutting_plane_triangles,
+		const std::vector<int>& flag_cut_layers_is_hole,
+		const std::map<int, int>& follow_index,
+		Slicer_2& all_slicer,
+		std::vector<int>& id_contact_faces) const;
 
 public:
 
 	const double layer_vertex_threshold = 1e-4;
 	const double small_layer_height = 1e-2;
-
-	struct SurfaceMeshSliceSegment {
-		Point_3 start;
-		Point_3 end;
-		int face_id = -1;
-	};
-
-	struct SurfaceMeshSliceData {
-		Polylines contour_points;
-		std::vector<int> contour_contain_next_id;
-		std::vector<std::vector<SurfaceMesh::Face_index>> contour_face_ids;
-		double layer_z = 0.0;
-		std::vector<Eigen::Vector3d> face_normals;
-	};
 
 	void BuildSurfaceMeshSlices(std::vector<SurfaceMeshSliceData>& slices) const;
 	bool BuildSurfaceMeshSingleSlice(
@@ -485,6 +470,7 @@ private:
 	int cont_extra_additive_orientation;
 	string file_name;
 	string suf;
+	ContactFaceTriangulationMode contact_face_triangulation_mode = ContactFaceTriangulationMode::Earcut;
 
 	std::vector<std::vector<int>> EvaluateMergedPatchToolCollision(
 		const Slicer_2& merged_patch,

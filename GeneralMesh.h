@@ -6,13 +6,20 @@
 #include <string>
 #include <Eigen/Dense>
 
-using namespace std;
-typedef vector<int> v_int;
 const double PI = 3.14159265358979323;
+
+
+using std::vector;
+using std::endl;
+using std::ofstream;
+using std::string;
+using std::to_string;
 
 class General_Mesh
 {
 public:
+
+	typedef vector<int> v_int;
 	General_Mesh();
 	~General_Mesh();
 

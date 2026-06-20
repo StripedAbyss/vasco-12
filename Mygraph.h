@@ -24,9 +24,9 @@ public:
 
 	int total_node_num;
 	std::vector<Edge> edges;
-	vector<vector<int>>  G;
-	vector<vector<int>>  G_2;
-	vector<vector<int>>  G_3;
+	std::vector<std::vector<int>>  G;
+	std::vector<std::vector<int>>  G_2;
+	std::vector<std::vector<int>>  G_3;
 	std::vector<int>  in_degree;
 	std::vector<int>  out_degree;
 	std::vector<bool> node_visited, edge_deleted;

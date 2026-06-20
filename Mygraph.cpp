@@ -32,6 +32,7 @@ void MyGraph::AddEdge_2(int from, int to)
 
 void MyGraph::UpdateDegree(int node_id, int change)
 {
+	std::cout << "update degree: node_id: " << node_id << " change: " << change << std::endl;
 	for (int i = 0; i < G[node_id].size(); i++) {
 		if (edge_deleted[G[node_id][i]]) continue;
 		int to = this->edges[G[node_id][i]].GetTo();

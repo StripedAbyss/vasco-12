@@ -4,8 +4,10 @@
 #include<algorithm>
 #include<cstring>
 #include<cmath>
-using namespace std;
 #define maxn_poly 510
+
+using std::swap;
+using std::reverse;
 
 //inline int sig(double d) {
 //    return(d > eps) - (d < -eps);

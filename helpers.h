@@ -13,7 +13,6 @@
 #include <filesystem>
 
 #include <Eigen/Dense>
-using namespace std;
 
 
 struct nozzle
@@ -39,7 +38,7 @@ struct cutter
 	double total_height;
 };
 
-const int terminate_threshold_of_number_of_faces = 1000;  //1500
+const int terminate_threshold_of_number_of_faces = 1500;  //1500
 const int    maxn = 10000;
 const int    MAX_I = 100000000;
 const double eps = 1e-10;

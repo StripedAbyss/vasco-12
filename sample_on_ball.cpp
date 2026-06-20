@@ -38,7 +38,7 @@ void SAMPLE_ON_BALL::OrientationSamplePoints_2()
         double theta = goldenAngle * i;
 
         double x = cos(theta) * radiusXY;
-        double z = sin(theta) * radiusXY;
+        double z = sin(theta)    * radiusXY;
 
         if (z > 0.5)
             sample_points.push_back({ x * 1, y * 1, z * 1 });

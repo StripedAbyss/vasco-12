@@ -1,5 +1,38 @@
 #include "layer_graph.h"
 
+namespace {
+static bool SurfaceMeshContourIsSelfSupport(
+	const std::vector<int>& face_ids,
+	const std::vector<Eigen::Vector3d>& face_normals)
+{
+	if (face_ids.empty()) {
+		return true;
+	}
+	const Eigen::Vector3d base_normal(0, 0, 1);
+	int cont_not_set_support = 0;
+	for (int face_id : face_ids) {
+		if (face_id < 0 || face_id >= static_cast<int>(face_normals.size())) {
+			continue;
+		}
+		const Eigen::Vector3d& face_normal = face_normals[face_id];
+		if (face_normal.dot(base_normal) + sin(PI / 3.6) < 0) {
+			++cont_not_set_support;
+		}
+	}
+	return double(cont_not_set_support) / double(face_ids.size()) <= 0.2;
+}
+
+static std::vector<Eigen::Vector2d> SliceContourToPolygon(const Polyline_type& contour)
+{
+	std::vector<Eigen::Vector2d> polygon;
+	polygon.reserve(contour.size());
+	for (const auto& p : contour) {
+		polygon.emplace_back(p.x(), p.y());
+	}
+	return polygon;
+}
+}
+
 Layer_Graph::Layer_Graph(const Data& data)
 {
 	this->total_node_num = data.total_node_num;
@@ -31,6 +64,219 @@ void Layer_Graph::creat_ball(string file_name, std::vector<Eigen::MatrixXd> vis_
 		for (int j = 0; j < F_2.rows(); j++)
 			all_balls << "f " << F_2(j, 0) + i * V_2.rows() + 1 << " " << F_2(j, 1) + i * V_2.rows() + 1 << " " << F_2(j, 2) + i * V_2.rows() + 1 << endl;
 	}
+}
+
+void Layer_Graph::GetTrianglesForSurfaceMeshSlices(
+	const std::vector<SurfaceMeshSliceData>& slices,
+	const Eigen::Vector3d& vectorAfter,
+	int height_of_beam_search,
+	int id_continue)
+{
+	std::vector<std::vector<std::vector<int>>> contour_face_ids;
+	std::vector<Eigen::Vector3d> face_normals;
+	for (const auto& slice : slices) {
+		contour_face_ids.push_back({});
+		for (const auto& face_id_list : slice.contour_face_ids) {
+			contour_face_ids.back().push_back({});
+			for (const auto& face_index : face_id_list) {
+				contour_face_ids.back().back().push_back(static_cast<int>(face_index));
+			}
+		}
+		for (const auto& normal : slice.face_normals) {
+			face_normals.push_back(normal);
+		}
+	}
+	GetTrianglesForLayersFromMesh(contour_face_ids, face_normals, vectorAfter, height_of_beam_search, id_continue);
+}
+
+void Layer_Graph::GenerateDependencyEdgesFromSurfaceMeshSlices( //现在是只根据点是否在上一个层的轮廓内来生成依赖边，可以改成根据边是否穿过上一个层的轮廓来生成依赖边
+	const std::vector<SurfaceMeshSliceData>& slices)
+{
+	for (size_t i = 1; i < slices.size(); ++i) {
+		std::vector<Polygon> last_layer_polygons;
+		for (const auto& contour : slices[i - 1].contour_points) {
+			std::vector<Eigen::Vector2d> polygon_points;
+			polygon_points.reserve(contour.size());
+			for (const auto& p : contour) {
+				polygon_points.emplace_back(p.x(), p.y());
+			}
+			auto offset_polygon_points = ConstructPolygonPoints(polygon_points, dependence_offset);
+
+			last_layer_polygons.push_back(offset_polygon_points);
+		}
+		for (size_t j = 0; j < slices[i].contour_points.size(); ++j) {
+			for (size_t m = 0; m < last_layer_polygons.size(); ++m) {
+				for (const auto& point : slices[i].contour_points[j]) {
+					Point_2 test_point_2(point.x(), point.y());
+					Eigen::Vector2d test_point(point.x(), point.y());
+
+
+					//if (CGAL::bounded_side_2(last_layer_polygons[m].vertices_begin(), last_layer_polygons[m].vertices_end(), test_point_2, K()) != CGAL::ON_UNBOUNDED_SIDE) {
+					//	const int from_id = data.index_inv[std::make_pair(static_cast<int>(i - 1), static_cast<int>(m))];
+					//	const int to_id = data.index_inv[std::make_pair(static_cast<int>(i), static_cast<int>(j))];
+					//	this->AddEdge(from_id, to_id);
+					//	temp_edges.push_back(make_pair(from_id, to_id));
+					//	break;
+					//}
+
+					if (last_layer_polygons[m].JudgePointInside(test_point)) {
+						const int from_id = data.index_inv[std::make_pair(static_cast<int>(i - 1), static_cast<int>(m))];
+						const int to_id = data.index_inv[std::make_pair(static_cast<int>(i), static_cast<int>(j))];
+						this->AddEdge(from_id, to_id);
+						temp_edges.push_back(make_pair(from_id, to_id));
+						break;
+					}
+				}
+			}
+		}
+	}
+}
+
+void Layer_Graph::CollisionDetectionForAdditiveManufacturingFromSurfaceMeshSlices(
+	const std::vector<SurfaceMeshSliceData>& slices,
+	nozzle the_nozzle)
+{
+	if (slices.empty()) {
+		std::cout << "[Layer_Graph::CollisionDetectionForAdditiveManufacturingFromSurfaceMeshSlices] Warning: No slices provided. Collision detection skipped." << std::endl;
+		return;
+	}
+
+
+	vector<pair<int, int>> temp_collision_edges;
+
+	for (size_t i = 0; i < slices.size(); ++i) {
+		for (size_t j = 0; j < slices[i].contour_points.size(); ++j) {
+			for (size_t ii = i + 1; ii < slices.size(); ++ii) {
+				double circle_r;
+				if (slices[ii].layer_z - slices[i].layer_z < 0) {
+					std::cout << "[Layer_Graph::CollisionDetectionForAdditiveManufacturingFromSurfaceMeshSlices] Warning: Layer " << ii << " is below layer " << i << ". Skipping collision detection for this pair of layers." << std::endl;
+					continue;
+				}
+				double layer_distance = slices[ii].layer_z - slices[i].layer_z;
+				if (layer_distance < the_nozzle.nozzle_H_half) {
+					circle_r = the_nozzle.lowwer_surface_r + layer_distance * (the_nozzle.upper_surface_r - the_nozzle.lowwer_surface_r) / the_nozzle.nozzle_H_half;
+				}
+				//if ((ii - i) * dh < the_nozzle.nozzle_H_half)
+				//	circle_r = the_nozzle.lowwer_surface_r + (ii - i) * dh * (the_nozzle.upper_surface_r - the_nozzle.lowwer_surface_r) / the_nozzle.nozzle_H_half;
+				else {
+					circle_r = the_nozzle.upper_surface_r;
+				}
+				for (size_t jj = 0; jj < slices[ii].contour_points.size(); ++jj) {
+					bool jud_collision = false;
+					if (layer_distance > the_nozzle.nozzle__H_total) {
+						jud_collision = true;
+						temp_collision_edges.push_back(make_pair(data.index_inv[std::make_pair(i, j)], data.index_inv[std::make_pair(ii, jj)]));
+						continue;
+					}
+					else {
+						for (const auto& p1 : slices[i].contour_points[j]) {
+							for (const auto& p2 : slices[ii].contour_points[jj]) {
+								if (pow(p2.x() - p1.x(), 2) + pow(p2.y() - p1.y(), 2) - pow(circle_r, 2) < 0) {
+									jud_collision = true;
+									break;
+								}
+							}
+							if (jud_collision) {
+								break;
+							}
+						}
+					}
+					if (jud_collision) {
+						const int from_id = data.index_inv[std::make_pair(static_cast<int>(i), static_cast<int>(j))];
+						const int to_id = data.index_inv[std::make_pair(static_cast<int>(ii), static_cast<int>(jj))];
+						//this->AddEdge_2(from_id, to_id);
+						//temp_edges.push_back(make_pair(from_id, to_id));
+						temp_collision_edges.push_back(make_pair(from_id, to_id));
+					}
+				}
+			}
+		}
+	}
+
+
+	// Build the dependency matrix without raw pointers.
+	std::vector<std::vector<bool>> dependency_relationship(
+		data.total_node_num,
+		std::vector<bool>(data.total_node_num, false));
+
+	for (int layer_id = 1; layer_id < static_cast<int>(data.slice_points.size()); ++layer_id) {
+		for (int point_id = 0; point_id < static_cast<int>(data.slice_points[layer_id].size()); ++point_id) {
+			const int target_node = data.index_inv[std::make_pair(layer_id, point_id)];
+			std::vector<int> current_frontier{ target_node };
+
+			for (int remaining_layers = layer_id; remaining_layers > 0 && !current_frontier.empty(); --remaining_layers) {
+				std::vector<int> next_frontier;
+				for (const auto& edge : temp_edges) {
+					if (std::find(current_frontier.begin(), current_frontier.end(), edge.second) == current_frontier.end()) {
+						continue;
+					}
+
+					dependency_relationship[edge.first][target_node] = true;
+					next_frontier.push_back(edge.first);
+				}
+				current_frontier = std::move(next_frontier);
+			}
+		}
+	}
+
+	cont_normal_dependency_edges = temp_edges.size();
+
+
+	//cout << "the number of dependency edges: " << temp_edges.size() << endl;
+	for (const auto& collision_edge : temp_collision_edges) {
+		const int from = collision_edge.first;
+		const int to = collision_edge.second;
+		if (dependency_relationship[from][to]) {
+			continue;
+		}
+
+		dependency_relationship[from][to] = true;
+		for (int node_id = 0; node_id < data.total_node_num; ++node_id) {
+			if (dependency_relationship[to][node_id]) {
+				dependency_relationship[from][node_id] = true;
+			}
+		}
+
+		this->AddEdge_2(from, to);
+		temp_edges.push_back(make_pair(from, to));
+	}
+
+
+	//cout << endl << "time..." << double(end_time_9 - start_time_9) / CLOCKS_PER_SEC << endl;
+}
+
+void Layer_Graph::BuildLayerGraphFromSurfaceMeshSlices(
+	const std::vector<SurfaceMeshSliceData>& slices,
+	nozzle the_nozzle)
+{
+	this->total_node_num = 0;
+	for (const auto& slice : slices) {
+		this->total_node_num += static_cast<int>(slice.contour_points.size());
+	}
+	this->in_degree.assign(this->total_node_num, 0);
+	this->out_degree.assign(this->total_node_num, 0);
+	this->node_visited.assign(this->total_node_num, false);
+	this->edge_deleted.assign(this->total_node_num * this->total_node_num, false);
+	this->G.resize(maxn);
+	this->G_2.resize(maxn);
+	this->G_3.resize(maxn);
+	this->temp_edges.clear();
+	this->all_triangles_of_layers.clear();
+	this->is_the_layer_self_suppot.clear();
+	this->data.total_node_num = this->total_node_num;
+	this->data.index.clear();
+	this->data.index_inv.clear();
+	int flat_id = 0;
+	for (size_t i = 0; i < slices.size(); ++i) {
+		for (size_t j = 0; j < slices[i].contour_points.size(); ++j) {
+			this->data.index[flat_id] = std::make_pair(static_cast<int>(i), static_cast<int>(j));
+			this->data.index_inv[std::make_pair(static_cast<int>(i), static_cast<int>(j))] = flat_id;
+			++flat_id;
+		}
+	}
+	this->GetTrianglesForSurfaceMeshSlices(slices, Eigen::Vector3d(0, 0, 1), 0, 0);
+	this->GenerateDependencyEdgesFromSurfaceMeshSlices(slices);
+	this->CollisionDetectionForAdditiveManufacturingFromSurfaceMeshSlices(slices, the_nozzle);
 }
 
 void Layer_Graph::GetTrianglesForLayersFromMesh(

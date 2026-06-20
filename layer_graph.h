@@ -7,6 +7,7 @@
 #include "Mygraph.h"
 #include "data.h"
 #include "sample_on_ball.h"
+#include "surface_mesh_slice_data.h"
 #include     <set>
 #include  <vector>
 #include  <string>
@@ -61,6 +62,19 @@ public:
 		const Eigen::Vector3d& vectorAfter,
 		int height_of_beam_search,
 		int id_continue);
+	void GetTrianglesForSurfaceMeshSlices(
+		const std::vector<SurfaceMeshSliceData>& slices,
+		const Eigen::Vector3d& vectorAfter,
+		int height_of_beam_search,
+		int id_continue);
+	void GenerateDependencyEdgesFromSurfaceMeshSlices(
+		const std::vector<SurfaceMeshSliceData>& slices);
+	void BuildLayerGraphFromSurfaceMeshSlices(
+		const std::vector<SurfaceMeshSliceData>& slices,
+		nozzle the_nozzle);
+	void CollisionDetectionForAdditiveManufacturingFromSurfaceMeshSlices(
+		const std::vector<SurfaceMeshSliceData>& slices,
+		nozzle the_nozzle);
 	void GenerateDependencyEdges();
 	void BuildLayerGraph(nozzle the_nozzle);
     void BuildDependencyGraph(std::vector<Eigen::Vector3d>& all_points);

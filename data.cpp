@@ -1,6 +1,6 @@
 #include "data.h"
 
-void Data::ReadData(vector<vector<vector<Vertex>>> all_slice_points, vector<vector<vector<Vertex>>> all_slice_points_contain)
+void Data::ReadData(vector<vector<vector<Eigen::Vector3d>>> all_slice_points, vector<vector<vector<Eigen::Vector3d>>> all_slice_points_contain)
 {
 	int total_layer, s_num, p_num;
 	double x, y, z, x2, y2;
@@ -22,16 +22,16 @@ void Data::ReadData(vector<vector<vector<Vertex>>> all_slice_points, vector<vect
 		for (int j = 0; j < s_num; j++) {
 			p_num = all_slice_points[i][j].size(); // 每个loop的点数量
 			for (int k = 0; k < p_num; k++) {
-				x = all_slice_points[i][j][k].x;
-				y = all_slice_points[i][j][k].y;
-				z = all_slice_points[i][j][k].z;
+				x = all_slice_points[i][j][k].x();
+				y = all_slice_points[i][j][k].y();
+				z = all_slice_points[i][j][k].z();
 				this->slice_points[i][j].push_back(Eigen::Vector2d(x, y));
 				this->z_value[i][j].push_back(z);
 			}
 			if (all_slice_points_contain[i][j].size() != 0) {
 				for (int k = 0; k < all_slice_points_contain[i][j].size(); k++) {
-					x2 = all_slice_points_contain[i][j][k].x;
-					y2 = all_slice_points_contain[i][j][k].y;
+					x2 = all_slice_points_contain[i][j][k].x();
+					y2 = all_slice_points_contain[i][j][k].y();
 					this->slice_points_contain[i][j].push_back(Eigen::Vector2d(x2, y2));
 				}
 			}

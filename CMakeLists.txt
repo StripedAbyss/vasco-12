@@ -127,6 +127,7 @@ set(HDR_FILES
   helpers.h
   edge.h
   sample_on_ball.h
+  surface_mesh_slice_data.h
   gco-v3.0/GCoptimization.h      # 若源码内置
   # 其他头文件可继续补充
 )

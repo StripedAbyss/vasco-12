@@ -8,10 +8,13 @@
 
 #include "helpers.h"
 #include "katana/datastructures.h"
+
+using std::vector;
+
 class Data
 {
 public:
-	void ReadData(vector<vector<vector<Vertex>>> all_slice_points, vector<vector<vector<Vertex>>> all_slice_points_contain);
+	void ReadData(vector<vector<vector<Eigen::Vector3d>>> all_slice_points, vector<vector<vector<Eigen::Vector3d>>> all_slice_points_contain);
 
 	int total_node_num;
 	std::vector<std::vector<std::vector<Eigen::Vector2d>>> slice_points;

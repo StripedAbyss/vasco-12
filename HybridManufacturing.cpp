@@ -197,6 +197,109 @@ namespace
 				<< ", manifold=" << is_manifold
 				<< ", non_manifold_vertices=" << non_manifold_vertex_count
 				<< std::endl;
+			const std::string file_stem = [&current_file_name]() {
+				const std::size_t slash_pos = current_file_name.find_last_of("/\\");
+				std::string name = (slash_pos == std::string::npos) ? current_file_name : current_file_name.substr(slash_pos + 1);
+				const std::size_t dot_pos = name.find_last_of('.');
+				if (dot_pos != std::string::npos) {
+					name = name.substr(0, dot_pos);
+				}
+				return name;
+			}();
+
+			std::ofstream boundary_report("model\\" + file_stem + "_mesh_boundary_report.txt");
+			if (boundary_report.is_open()) {
+				boundary_report << std::setprecision(17);
+				boundary_report << "source_file: " << current_file_name << '\n';
+				boundary_report << "is_closed: " << is_closed << '\n';
+				boundary_report << "is_manifold: " << is_manifold << '\n';
+				boundary_report << "non_manifold_vertex_count: " << non_manifold_vertex_count << '\n';
+
+				std::set<SurfaceMesh::Face_index> boundary_faces;
+
+				if (!is_closed) {
+					std::size_t border_edge_count = 0;
+					for (auto edge : current_node_mesh.edges()) {
+						if (!CGAL::is_border(edge, current_node_mesh)) {
+							continue;
+						}
+
+						auto h = halfedge(edge, current_node_mesh);
+						auto interior_h = CGAL::is_border(h, current_node_mesh) ? opposite(h, current_node_mesh) : h;
+						auto s = source(h, current_node_mesh);
+						auto t = target(h, current_node_mesh);
+						const Point_3 ps = current_node_mesh.point(s);
+						const Point_3 pt = current_node_mesh.point(t);
+						const auto adjacent_face = face(interior_h, current_node_mesh);
+						if (adjacent_face != SurfaceMesh::null_face()) {
+							boundary_faces.insert(adjacent_face);
+						}
+
+						boundary_report << "border_edge[" << border_edge_count << "]: "
+							<< "(" << CGAL::to_double(ps.x()) << ", " << CGAL::to_double(ps.y()) << ", " << CGAL::to_double(ps.z()) << ")"
+							<< " -> "
+							<< "(" << CGAL::to_double(pt.x()) << ", " << CGAL::to_double(pt.y()) << ", " << CGAL::to_double(pt.z()) << ")"
+							<< '\n';
+						++border_edge_count;
+					}
+					boundary_report << "border_edge_count: " << border_edge_count << '\n';
+				}
+				boundary_report << "boundary_adjacent_face_count: " << boundary_faces.size() << '\n';
+
+				if (!is_manifold) {
+					std::size_t non_manifold_index = 0;
+					for (auto vertex : current_node_mesh.vertices()) {
+						if (!PMP::is_non_manifold_vertex(vertex, current_node_mesh)) {
+							continue;
+						}
+
+						const Point_3 p = current_node_mesh.point(vertex);
+						boundary_report << "non_manifold_vertex[" << non_manifold_index << "]: "
+							<< "(" << CGAL::to_double(p.x()) << ", " << CGAL::to_double(p.y()) << ", " << CGAL::to_double(p.z()) << ")"
+							<< '\n';
+						++non_manifold_index;
+					}
+					boundary_report << "non_manifold_vertex_count_verified: " << non_manifold_index << '\n';
+				}
+
+				if (!boundary_faces.empty()) {
+					std::vector<Triangle> boundary_face_triangles;
+					boundary_face_triangles.reserve(boundary_faces.size());
+					for (auto face_index : boundary_faces) {
+						std::vector<Point_3> face_points;
+						for (auto vertex_index : CGAL::vertices_around_face(current_node_mesh.halfedge(face_index), current_node_mesh)) {
+							face_points.push_back(current_node_mesh.point(vertex_index));
+						}
+						if (face_points.size() < 3) {
+							boundary_report << "boundary_face_with_less_than_3_vertices: face=" << face_index << " vertex_count=" << face_points.size() << '\n';
+							continue;
+						}
+
+						const Point_3& p0 = face_points[0];
+						for (std::size_t i = 1; i + 1 < face_points.size(); ++i) {
+							Triangle tri;
+							tri._vertices[0] = Vertex(CGAL::to_double(p0.x()), CGAL::to_double(p0.y()), CGAL::to_double(p0.z()));
+							tri._vertices[1] = Vertex(CGAL::to_double(face_points[i].x()), CGAL::to_double(face_points[i].y()), CGAL::to_double(face_points[i].z()));
+							tri._vertices[2] = Vertex(CGAL::to_double(face_points[i + 1].x()), CGAL::to_double(face_points[i + 1].y()), CGAL::to_double(face_points[i + 1].z()));
+							tri.normal = Vertex(0, 0, 0);
+							boundary_face_triangles.push_back(tri);
+						}
+					}
+					if (!boundary_face_triangles.empty()) {
+						Katana::Instance().stl.saveStl("model\\" + file_stem + "_boundary_faces.stl", boundary_face_triangles);
+						std::cerr << "[PrepareOuterBeamSearchNode] boundary-adjacent faces saved to model\\"
+							<< file_stem << "_boundary_faces.stl" << std::endl;
+					}
+				}
+
+				boundary_report.close();
+				std::cerr << "[PrepareOuterBeamSearchNode] boundary diagnostics saved to model\\"
+					<< file_stem << "_mesh_boundary_report.txt" << std::endl;
+			}
+			else {
+				std::cerr << "[PrepareOuterBeamSearchNode] failed to create boundary diagnostics report for "
+					<< current_file_name << std::endl;
+			}
 			return false;
 		}
 
@@ -2643,6 +2746,10 @@ void HybridManufacturing::CutMesh(
 
 	all_slicer.positions = slicer.positions;
 	all_slicer.triangles = ori_triangle;
+
+
+	all_slicer.save(file_name + "-after_cut-" + std::to_string(height_of_beam_search) + "EEEERQ.obj");
+
 	//--------------------save candidate_triangles-----------------------//
 	int current_index = 0;	//
 	std::vector<VEctor> min_z_point;	//每个候选三角形中z值最小的顶点坐标
@@ -2861,7 +2968,21 @@ void HybridManufacturing::CutMesh(
 		temp_slicer_1.triangles.push_back(all_slicer.triangles[id_remove_triangles[i]]);
 	}
 	//cout << "remove faces " << temp_slicer_1.triangles.size() << endl;
+
+	//RotateSlicerPositions(temp_slicer_1, vector_after, vectorBefore);
 	temp_slicer_1.save(file_name + "-all2-" + std::to_string(height_of_beam_search) + "QWERQ.obj");
+	
+	std::vector<std::vector<Eigen::Vector3d>> all_cut_layers_v3d;
+	for (int i = 0; i < all_cut_layers.size(); i++) {
+		std::vector<Eigen::Vector3d> temp_layer;
+		for (int j = 0; j < all_cut_layers[i].size(); j++) {
+			Eigen::Vector3d temp_point(all_cut_layers[i][j].x, all_cut_layers[i][j].y, all_cut_layers[i][0].z);
+			temp_layer.push_back(temp_point);
+		}
+		all_cut_layers_v3d.push_back(temp_layer);
+	}
+	vasco::io::outputContourToObj(all_cut_layers_v3d, Eigen::Vector3d(0.5, 0.5, 0.0),  file_name + "-all_cut_layers-" + std::to_string(height_of_beam_search) + "QWERQ.obj");
+
 
 	//add remaining face, set a distance threshold Dis, only a face less Dis from other cut layers and no other dependency layer exist, the face is consider to remaining face
 	double Dis = dh * 2;
@@ -3195,6 +3316,17 @@ void HybridManufacturing::CutMesh(
 				}
 			}
 
+			std::vector<std::vector<Eigen::Vector3d>> polygons_v3d;
+			for (int j = 0; j < polygon.size(); j++) {
+				std::vector<Eigen::Vector3d> temp_polygon_v3d;
+				for (int k = 0; k < polygon[j].size(); k++) {
+					Eigen::Vector3d temp_point_v3d(polygon[j][k][0], polygon[j][k][1], all_slicer.positions[real_cutting_plane_triangles[i][0]][2]);
+					temp_polygon_v3d.push_back(temp_point_v3d);
+				}
+				polygons_v3d.push_back(temp_polygon_v3d);
+			}
+			vasco::io::outputContourToObj(polygons_v3d, Eigen::Vector3d(0.5, 0.5, 0.0), file_name + "-contact_face_polygon-" + std::to_string(height_of_beam_search) + "_" + std::to_string(i) + ".obj");
+
 			std::vector<NN> indices = mapbox::earcut<NN>(polygon);
 			for (int j = 0; j < indices.size();) {
 				TRiangle the_new_cutting_plane_triangle;
@@ -3236,7 +3368,10 @@ void HybridManufacturing::CutMesh(
 
 	Slicer_2 all_slicer_2 = all_slicer;
 	all_slicer_2.triangles = remove_triangles;
+	
 	RotateSlicerPositions(all_slicer_2, vector_after, vectorBefore);
+
+
 	if (judge_continue_additive == false)
 		all_slicer_2.save(file_name + "-" + to_string(height_of_beam_search) + "_" + to_string(cont_number_of_queue) + "_current" + ".obj");
 	else
@@ -3254,6 +3389,9 @@ void HybridManufacturing::CutMesh(
 	//	id_contact_faces,
 	//	cut_plane_z_values,
 	//	std::max(dh, 5.0));
+
+
+	all_slicer.save(file_name + "-" + to_string(height_of_beam_search) + "_" + to_string(cont_number_of_queue) + "_before_rotate_back.obj");
 
 	RotateSlicerPositions(all_slicer, vector_after, vectorBefore);
 

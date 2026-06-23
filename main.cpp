@@ -37,14 +37,17 @@ void get_need_file(string path, vector<string>& file, vector<string>& file_name,
 void change_name(string my_file_path, string suff);
 vector<fs::path> collect_files(string dir);
 void remove_files(vector<fs::path> files, string dir);
+nozzle create_nozzle();
+cutter create_cutter(float tolerance);
+bool process_model(const std::string& my_file_path, const std::string& suff, const nozzle& the_nozzle, const cutter& cutting_tool);
 
 
 //clock_t start_time, end_time;
+
 int main()
 {
-
-    std::cout << "[Debug] Current Working Directory: " 
-              << std::filesystem::current_path() << std::endl;
+	std::cout << "[Debug] Current Working Directory: "
+	          << std::filesystem::current_path() << std::endl;
 
 	const std::string iniPath = "input_files.ini";
 	const IniData ini = LoadIni(iniPath);
@@ -56,162 +59,16 @@ int main()
 		return 1;
 	}
 
-	for (int i = 0; i < my_file_name.size(); i++)
-	{
-		
-        std::string suff = my_file_name[i];
-		std::string file_name = my_file_path + "\\" + suff + "\\" + suff;
-		//std::string file_name_without_ext = my_file[i].substr(0, my_file[i].find('.'));
-		
-		float tolerance = 0.05;   //0.05
-		nozzle the_nozzle;
-		the_nozzle.upper_surface_r = 4.5;  //4.5
-		the_nozzle.lowwer_surface_r = 1.0;  //1.0
-		the_nozzle.nozzle__H_total = 15;  //15
-		the_nozzle.nozzle_H_half = 5;  //5
+	const float tolerance = 0.05f;
+	const nozzle the_nozzle = create_nozzle();
+	const cutter cutting_tool = create_cutter(tolerance);
 
-		cutter cutting_tool;
-		cutting_tool.cylinder_r = 1.5; //1.5 
-		cutting_tool.cylinder_height = 20;  //25
-		cutting_tool.ball_r = 1.5;  //1.5  
-		cutting_tool.carriage_r = 25;  //25
-		cutting_tool.carriage_height = 30;  //30
-
-		cutting_tool.cylinder_r *= (1 + tolerance);
-		cutting_tool.carriage_r *= (1 + tolerance);
-		cutting_tool.cylinder_height *= (1 - tolerance);
-		cutting_tool.carriage_height *= (1 - tolerance);
-		cutting_tool.ball_r *= (1 + tolerance);
-
-		//cutting_tool.carriage_r = 50;
-		//
-
-		//std::string file_name = ".\\models\\data\\data";   //result is a model name
-		std::string path_obj;
-		ifstream file_normal(file_name + ".txt");
-		int num_patches;
-		file_normal >> num_patches;
-		vector<Eigen::Matrix3d> all_rotMatrix;
-
-		Eigen::MatrixXd V;
-		Eigen::MatrixXi F;
-		Eigen::MatrixXd N;
-
-		path_obj = file_name + ".obj";
-		cout << path_obj << endl;
-		igl::readOBJ(path_obj, V, F);
-		vasco::core::getMeshNormal(V, F, N);
-
-
-		Katana::Instance().stl.saveStlFromObj(file_name +"-0_0" + ".stl", V, F);
-		igl::writeOBJ(file_name + "-0_0" + ".obj", V, F); //新加的语句，加了以后beamsearch缺的obj补上了
-		HybridManufacturing HybridManufacturing(file_name, suff,V, F, N);
-		HybridManufacturing.open_vis_voronoi = 0;
-		HybridManufacturing.open_vis_red_points = 0;
-		HybridManufacturing.open_vis_green_points = 0;
-		HybridManufacturing.open_vis_stair_case = 0;
-
-		HybridManufacturing.open_change_orientation = 0;
-
-		//HybridManufacturing.subtractive_accessibility_decomposition_global(5,cutting_tool);
-		//return 0;
-
-		// 替换原来的 HybridManufacturing.GetVoronoiCells1();
-		HybridManufacturing.InitializeVoronoi();
-
-		int flag = HybridManufacturing.CollisionDetectionForSubtractiveManufacturing(cutting_tool);
-		// 旧的调用方式
-		//HybridManufacturing.GetVoronoiCells1();
-		////HybridManufacturing.GetVoronoiCells();
-		//int flag = HybridManufacturing.CollisionDetectionForSubtractiveManufacturing(cutting_tool);
-
-		string src_file = my_file_path + "\\" + suff;
-		string target_file1 = "data\\done\\" + suff;
-		fs::create_directory(target_file1);
-		if (flag == -1) {
-			// 说明无碰撞点
-			auto files = collect_files(src_file);
-			remove_files(files, target_file1);
-			// 删除transformed_mesh_10K中的文件
-			fs::remove(src_file);
-			continue;
-		}
-		HybridManufacturing.outer_beam_search(the_nozzle, cutting_tool);
-
-		// 移动已经处理好的文件夹
-		
-		//auto files = collect_files(src_file);
-		//remove_files(files, target_file1);
-		//// 删除transformed_mesh_10K中的文件
-		//fs::remove(src_file);
-		//// 删除transformed_mesh_10K_1中的文件
-		//fs::remove(my_file_path_duplicate + "\\" + suff + ".obj");
-		//fs::remove(my_file_path_duplicate + "\\" + suff + ".stl");
-		
-		
-		
+	for (const auto& suff : my_file_name) {
+		process_model(my_file_path, suff, the_nozzle, cutting_tool);
 	}
 
-	// STL 转 OBJ
-	//std::string my_file_path = ".\\data\\transformed_mesh_10K";
-	//
-	//vector<string> my_file;
-	//vector<string> my_file_name;
-	//string need_extension = ".stl";
-	//
-	//get_need_file(my_file_path, my_file, my_file_name, need_extension);
-	//for (int i = 0; i < my_file.size(); i++)
-	//{
-	//	
-	//	Eigen::MatrixXd V;
-	//	Eigen::MatrixXi F;
-	//	Eigen::MatrixXi N;
-
-	//	string pre_file_name = my_file_name[i].substr(0,my_file_name[i].find("."));
-	//	FILE* fp;
-	//	const char* f = my_file[i].c_str();
-	//	fp = fopen(f, "rb+");
-	//	
-	//	igl::readSTL(fp,V,F,N);
-	//	igl::writeOBJ(my_file_path + "\\" + pre_file_name + ".obj", V, F);
-	//	igl::writeSTL(my_file[i], V, F);
-	//	cout << i << endl;
-	//	fclose(fp);
-
-	//}
-	// 改变stl的二进制编码
-	//std::string my_file_path = ".\\data\\transformed_mesh_10K";
-
-	//vector<string> my_file;
-	//vector<string> my_file_name;
-	//string need_extension = ".stl";
-
-	//get_need_file(my_file_path, my_file, my_file_name, need_extension);
-	//
-	//for (int i = 0; i < my_file.size(); i++)
-	//{
-	//	string pre_file_name = my_file_name[i].substr(0, my_file_name[i].find("."));
-	//	FILE* fp;
-	//	const char* f = my_file[i].c_str();
-	//	fp = fopen(f, "rb+");
-
-	//	Eigen::MatrixXd V;
-	//	Eigen::MatrixXi F;
-	//	Eigen::MatrixXi N;
-	//	igl::readSTL(fp, V, F, N);
-	//	igl::writeSTL(my_file[i], V, F);
-
-	//	cout << i << endl;
-	//	fclose(fp);
-	//}
-	
-	//加0_0
-	//std::string my_file_path = ".\\data\\transformed_mesh_10K";
-	//change_name(my_file_path, ".obj");
-	//change_name(my_file_path, ".stl");
-
+	return 0;
 }
-
 
 // 遍历文件夹中指定文件后缀的文件
 void get_need_file(string path, vector<string>& file, vector<string>& file_name, string ext)
@@ -306,3 +163,80 @@ void remove_files(vector<fs::path> files, string dir)
 }
 
 
+
+
+nozzle create_nozzle()
+{
+	nozzle the_nozzle;
+	the_nozzle.upper_surface_r = 4.5;
+	the_nozzle.lowwer_surface_r = 1.0;
+	the_nozzle.nozzle__H_total = 15;
+	the_nozzle.nozzle_H_half = 5;
+	return the_nozzle;
+}
+
+cutter create_cutter(float tolerance)
+{
+	cutter cutting_tool;
+	cutting_tool.cylinder_r = 1.5;
+	cutting_tool.cylinder_height = 20;
+	cutting_tool.ball_r = 1.5;
+	cutting_tool.carriage_r = 25;
+	cutting_tool.carriage_height = 30;
+
+	cutting_tool.cylinder_r *= (1 + tolerance);
+	cutting_tool.carriage_r *= (1 + tolerance);
+	cutting_tool.cylinder_height *= (1 - tolerance);
+	cutting_tool.carriage_height *= (1 - tolerance);
+	cutting_tool.ball_r *= (1 + tolerance);
+	return cutting_tool;
+}
+
+bool process_model(const std::string& my_file_path, const std::string& suff, const nozzle& the_nozzle, const cutter& cutting_tool)
+{
+	std::string file_name = my_file_path + "\\" + suff + "\\" + suff;
+	std::string path_obj = file_name + ".obj";
+	std::cout << path_obj << std::endl;
+
+	ifstream file_normal(file_name + ".txt");
+	int num_patches = 0;
+	file_normal >> num_patches;
+	vector<Eigen::Matrix3d> all_rotMatrix;
+	(void)num_patches;
+	(void)all_rotMatrix;
+
+	Eigen::MatrixXd V;
+	Eigen::MatrixXi F;
+	Eigen::MatrixXd N;
+
+	igl::readOBJ(path_obj, V, F);
+	vasco::core::getMeshNormal(V, F, N);
+
+	Katana::Instance().stl.saveStlFromObj(file_name + "-0_0" + ".stl", V, F);
+	igl::writeOBJ(file_name + "-0_0" + ".obj", V, F); //新加的语句，加了以后beamsearch缺的obj补上了
+	HybridManufacturing hybrid_manufacturing(file_name, suff, V, F, N);
+	hybrid_manufacturing.open_vis_voronoi = 0;
+	hybrid_manufacturing.open_vis_red_points = 0;
+	hybrid_manufacturing.open_vis_green_points = 0;
+	hybrid_manufacturing.open_vis_stair_case = 0;
+	hybrid_manufacturing.open_change_orientation = 0;
+
+	//HybridManufacturing.subtractive_accessibility_decomposition_global(5,cutting_tool);
+		//return 0;
+
+	hybrid_manufacturing.InitializeVoronoi();
+	int flag = hybrid_manufacturing.CollisionDetectionForSubtractiveManufacturing(cutting_tool);
+
+	//std::string src_file = my_file_path + "\\" + suff;
+	//std::string target_file1 = "data\\done\\" + suff;
+	//fs::create_directory(target_file1);
+	//if (flag == -1) {
+	//	auto files = collect_files(src_file);
+	//	remove_files(files, target_file1);
+	//	fs::remove(src_file);
+	//	return false;
+	//}
+
+	hybrid_manufacturing.outer_beam_search(the_nozzle, cutting_tool);
+	return true;
+}

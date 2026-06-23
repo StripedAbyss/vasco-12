@@ -58,7 +58,6 @@ FetchContent_MakeAvailable(polyscope)
 
 # 查找第三方依赖
 # 注意：顺序很重要。底层依赖（如 ZLIB, TIFF）应先查找。
-find_package(Eigen3 CONFIG REQUIRED)
 find_package(CGAL CONFIG REQUIRED)
 find_package(OpenCV CONFIG REQUIRED)
 
@@ -87,6 +86,9 @@ set(SRC_FILES
   vasco/core/GeometryUtils.cpp
   vasco/core/GraphUtils.cpp
   vasco/core/Voronoi.cpp
+  vasco/core/MeshValidation.cpp
+  vasco/core/ContactTriangulation.cpp
+  vasco/core/SlicerMeshAdapter.cpp
   vasco/Visualization.cpp
   gco-v3.0/GCoptimization.cpp
   gco-v3.0/LinkedBlockList.cpp
@@ -117,6 +119,9 @@ set(HDR_FILES
   vasco/Visualization.h
   vasco/core/Types.h
   vasco/core/VascoUtils.h
+  vasco/core/MeshValidation.h
+  vasco/core/ContactTriangulation.h
+  vasco/core/SlicerMeshAdapter.h
   vasco/core/CgalUtils.h
   vasco/core/GraphUtils.h
   vasco/core/Voronoi.h

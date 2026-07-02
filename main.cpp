@@ -219,10 +219,11 @@ bool process_model(const std::string& my_file_path, const std::string& suff, con
 	hybrid_manufacturing.open_vis_red_points = 0;
 	hybrid_manufacturing.open_vis_green_points = 0;
 	hybrid_manufacturing.open_vis_stair_case = 0;
-	hybrid_manufacturing.open_change_orientation = 0;
+	hybrid_manufacturing.open_change_orientation = 1;
 
-	//HybridManufacturing.subtractive_accessibility_decomposition_global(5,cutting_tool);
-		//return 0;
+	//cutter cutting_tool_sub = cutting_tool;
+	//hybrid_manufacturing.subtractive_accessibility_decomposition_global(3, cutting_tool_sub);
+	//return 0;
 
 	hybrid_manufacturing.InitializeVoronoi();
 	int flag = hybrid_manufacturing.CollisionDetectionForSubtractiveManufacturing(cutting_tool);

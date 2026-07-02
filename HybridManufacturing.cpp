@@ -2476,8 +2476,8 @@ void HybridManufacturing::CutMesh(
 				}
 			}
 
-			contact_face_triangulation_mode = ContactFaceTriangulationMode::Earcut;
-			//contact_face_triangulation_mode = ContactFaceTriangulationMode::CGALRemesh;
+			//contact_face_triangulation_mode = ContactFaceTriangulationMode::Earcut;
+			contact_face_triangulation_mode = ContactFaceTriangulationMode::CGALRemesh;
 			if (contact_face_triangulation_mode == ContactFaceTriangulationMode::CGALRemesh) {
 				auto generated = vasco::contact_triangulation::TriangulateContactFacesWithCDT(
 					real_cutting_plane_triangles[i],
@@ -3231,6 +3231,8 @@ void HybridManufacturing::subtractive_accessibility_decomposition_global(int hei
 
 				// 按 patch_id 收集面，供 polyscope 分 mesh 可视化
 				std::map<int, std::vector<vasco::core::Tri3>> patch_to_faces;
+				std::map<int, std::vector<vasco::core::Tri3>> patch_id_to_faces;
+				std::map<std::pair<int, int>, std::vector<vasco::core::Tri3>> patch_ori_to_faces;
 
 				for (int i = 0; i < face_count; ++i) {
 					int patch_id = 1, ori_id = 0;
@@ -3273,11 +3275,99 @@ void HybridManufacturing::subtractive_accessibility_decomposition_global(int hei
 
 					// 保存到 patch 子网格
 					patch_to_faces[result_labels[i]].push_back(tri);
+					patch_id_to_faces[patch_id].push_back(tri);
+					patch_ori_to_faces[{ patch_id, ori_id }].push_back(tri);
 				}
 
 				if (skipped_faces > 0) {
 					std::cout << "[Warn] skipped faces while writing OBJ: " << skipped_faces
 						<< ", invalid_vertices=" << invalid_vertices << std::endl;
+				}
+
+				for (const auto& kv : patch_id_to_faces) {
+					const int patch_id = kv.first;
+					const auto& patch_faces = kv.second;
+					if (patch_faces.empty()) {
+						continue;
+					}
+
+					const std::string patch_obj_file =
+						".\\vis\\merged_patch_graphcut_patch_id_" + std::to_string(patch_id) + ".obj";
+					std::ofstream pofs(patch_obj_file);
+					if (!pofs.is_open()) {
+						std::cout << "[Warn] cannot open file for writing: " << patch_obj_file << std::endl;
+						continue;
+					}
+
+					const auto color = color_from_patch(patch_id);
+					int patch_v_count = 0;
+					for (const auto& tri : patch_faces) {
+						for (int k = 0; k < 3; ++k) {
+							const auto& p = slicer_load_merged_patch.positions[tri[k]];
+							pofs << "v " << p[0] << " " << p[1] << " " << p[2] << " "
+								<< color[0] << " " << color[1] << " " << color[2] << "\n";
+						}
+						pofs << "f " << (patch_v_count + 1) << " " << (patch_v_count + 2) << " " << (patch_v_count + 3) << "\n";
+						patch_v_count += 3;
+					}
+
+					std::cout << "[Info] wrote graph-cut patch OBJ: " << patch_obj_file
+						<< ", faces=" << patch_faces.size() << std::endl;
+				}
+
+				for (const auto& kv : patch_ori_to_faces) {
+					const int patch_id = kv.first.first;
+					const int ori_id = kv.first.second;
+					const auto& patch_faces = kv.second;
+					if (patch_faces.empty()) {
+						continue;
+					}
+
+					const std::string patch_ori_obj_file =
+						".\\vis\\merged_patch_graphcut_patch_id_" + std::to_string(patch_id)
+						+ "_ori_id_" + std::to_string(ori_id) + ".obj";
+					std::ofstream pofs(patch_ori_obj_file);
+					if (!pofs.is_open()) {
+						std::cout << "[Warn] cannot open file for writing: " << patch_ori_obj_file << std::endl;
+						continue;
+					}
+
+					const auto color = color_from_patch(ori_id);
+					int patch_v_count = 0;
+					for (const auto& tri : patch_faces) {
+						for (int k = 0; k < 3; ++k) {
+							const auto& p = slicer_load_merged_patch.positions[tri[k]];
+							pofs << "v " << p[0] << " " << p[1] << " " << p[2] << " "
+								<< color[0] << " " << color[1] << " " << color[2] << "\n";
+						}
+						pofs << "f " << (patch_v_count + 1) << " " << (patch_v_count + 2) << " " << (patch_v_count + 3) << "\n";
+						patch_v_count += 3;
+					}
+
+					std::cout << "[Info] wrote graph-cut patch/orientation OBJ: " << patch_ori_obj_file
+						<< ", faces=" << patch_faces.size() << std::endl;
+
+					Eigen::Vector3d tool_dir(0.0, 0.0, 1.0);
+					if (ori_id >= 0 && ori_id < static_cast<int>(sampling_subtractive.sample_points.size())) {
+						tool_dir = sampling_subtractive.sample_points[ori_id];
+					}
+					const double tool_dir_norm = tool_dir.norm();
+					if (tool_dir_norm > 1e-12) {
+						tool_dir /= tool_dir_norm;
+					}
+
+					const std::string tool_dir_file =
+						".\\vis\\merged_patch_graphcut_patch_id_" + std::to_string(patch_id)
+						+ "_ori_id_" + std::to_string(ori_id) + ".txt";
+					std::ofstream tdfs(tool_dir_file);
+					if (!tdfs.is_open()) {
+						std::cout << "[Warn] cannot open file for writing: " << tool_dir_file << std::endl;
+					}
+					else {
+						tdfs << tool_dir.x() << " " << tool_dir.y() << " " << tool_dir.z() << "\n";
+						std::cout << "[Info] wrote graph-cut patch/orientation tool direction: "
+							<< tool_dir_file << std::endl;
+					}
 				}
 
 				// polyscope: 按 patch_id 拆分 mesh，并设置固定颜色

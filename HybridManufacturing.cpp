@@ -352,6 +352,14 @@ std::vector<TRiangle> HybridManufacturing::FilterSurfaceRemoveTriangles(
 	surface_triangles.reserve(remove_triangles.size());
 
 	const size_t face_cnt = Normals.rows();
+	const double bottom_filter_threshold = 2.0;
+	const double bottom_normal_abs_z_threshold = 0.9;
+	double model_min_z = MAX_D;
+	for (int i = 0; i < V.rows(); ++i) {
+		model_min_z = std::min(model_min_z, V(i, 2));
+	}
+
+	std::size_t skipped_bottom_triangles = 0;
 	for (size_t i = 0; i < remove_triangles.size(); i++) {
 		Eigen::Vector3d v1, v2, v3;
 		v1.x() = slicer.positions[remove_triangles[i][0]][0];
@@ -372,7 +380,11 @@ std::vector<TRiangle> HybridManufacturing::FilterSurfaceRemoveTriangles(
 		double nc = (v2.x() - v1.x()) * (v3.y() - v1.y()) - (v2.y() - v1.y()) * (v3.x() - v1.x());
 
 		Eigen::Vector3d normal_vector(na, nb, nc);
-		normal_vector.normalize();
+		const double normal_length = normal_vector.norm();
+		if (normal_length <= 1e-12) {
+			continue;
+		}
+		normal_vector /= normal_length;
 
 		bool jud_surface = false;
 		for (size_t j = 0; j < face_cnt; j++) {
@@ -395,8 +407,24 @@ std::vector<TRiangle> HybridManufacturing::FilterSurfaceRemoveTriangles(
 		}
 
 		if (jud_surface) {
+			const double centroid_z = (v1.z() + v2.z() + v3.z()) / 3.0;
+			const bool is_bottom_triangle =
+				centroid_z - model_min_z <= bottom_filter_threshold
+				&& fabs(normal_vector.z()) >= bottom_normal_abs_z_threshold;
+			if (is_bottom_triangle) {
+				++skipped_bottom_triangles;
+				continue;
+			}
 			surface_triangles.push_back(remove_triangles[i]);
 		}
+	}
+
+	if (skipped_bottom_triangles != 0) {
+		std::cout << "[HybridManufacturing::FilterSurfaceRemoveTriangles] skipped bottom surface triangles: "
+			<< skipped_bottom_triangles
+			<< ", threshold_z=" << bottom_filter_threshold
+			<< ", min_z=" << model_min_z
+			<< std::endl;
 	}
 
 	return surface_triangles;

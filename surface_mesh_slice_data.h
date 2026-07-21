@@ -23,7 +23,8 @@ struct SurfaceMeshSliceSegment {
 
 struct SurfaceMeshSliceData {
 	Polylines contour_points;
-	std::vector<int> contour_contain_next_id;
+	// Local contour index of the direct parent in this slice; -1 means root.
+	std::vector<int> contour_parent_ids;
 	std::vector<std::vector<SurfaceMesh::Face_index>> contour_face_ids;
 	double layer_z = 0.0;
 	std::vector<Eigen::Vector3d> face_normals;

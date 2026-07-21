@@ -149,6 +149,9 @@ inline static double Distance2D(Eigen::Vector2d p1, Eigen::Vector2d p2) {
 }
 
 inline static std::vector<Eigen::Vector2d> ConstructPolygonPoints(const std::vector<Eigen::Vector2d>& points, double offset) { //layer_graph里面用了
+	if (points.size() < 2) {
+		return points;
+	}
 	Eigen::Vector2d dir;
 	std::vector<Eigen::Vector2d> polygon_Points;
 	std::vector<Eigen::Vector2d> inside;
@@ -182,6 +185,9 @@ inline static std::vector<Eigen::Vector2d> ConstructPolygonPoints(const std::vec
 
 
 inline static std::vector<Eigen::Vector2d> ConstructPolygonPoints_2(std::vector<Eigen::Vector2d>& points, double offset) { //layer_graph里面用了
+	if (points.size() < 2) {
+		return points;
+	}
 	Eigen::Vector2d dir;
 	std::vector<Eigen::Vector2d> polygon_Points;
 	std::vector<Eigen::Vector2d> inside;

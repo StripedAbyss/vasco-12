@@ -148,4 +148,24 @@ inline static std::vector<std::string> GetIniStringList(const IniData& ini,
 	return SplitCsv(GetIniString(ini, section, key));
 }
 
+inline static int GetIniInt(const IniData& ini,
+	const std::string& section,
+	const std::string& key,
+	int defaultValue)
+{
+	const std::string value = GetIniString(ini, section, key);
+	if (value.empty()) {
+		return defaultValue;
+	}
+
+	try {
+		return std::stoi(value);
+	}
+	catch (...) {
+		std::cerr << "[LoadIni] Invalid integer for [" << section << "] "
+			<< key << "=" << value << ", use default " << defaultValue << std::endl;
+		return defaultValue;
+	}
+}
+
 #endif

@@ -11,6 +11,9 @@ Polygon::~Polygon()
 
 bool Polygon::JudgePointInside(Eigen::Vector2d p)
 {
+	if (points.size() < 3) {
+		return false;
+	}
 	if (find == 0) {
 		minx = MAX_D;
 		maxx = MIN_D;

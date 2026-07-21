@@ -3,7 +3,7 @@
 
 void SAMPLE_ON_BALL::OrientationSamplePoints()
 {
-    //ÐÂ°æ¸ßË¹ÇòÃæ²ÉÑù£¨»Æ½ð½Ç¶È£©
+    //ï¿½Â°ï¿½ï¿½Ë¹ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Æ½ï¿½Ç¶È£ï¿½
     sample_points.clear();
     sample_points.push_back(Eigen::Vector3d(0, 0, 1));
 
@@ -18,14 +18,14 @@ void SAMPLE_ON_BALL::OrientationSamplePoints()
         double x = cos(theta) * radiusXY;
         double z = sin(theta) * radiusXY;
 
-        if (z > 0.5)
+        if (z > -0.02)
             sample_points.push_back({ x * 1, y * 1, z * 1 });
     }
 }
 
 void SAMPLE_ON_BALL::OrientationSamplePoints_2()
 {
-    //ÐÂ°æ¸ßË¹ÇòÃæ²ÉÑù£¨»Æ½ð½Ç¶È£©
+    //ï¿½Â°ï¿½ï¿½Ë¹ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Æ½ï¿½Ç¶È£ï¿½
     sample_points.clear();
     sample_points.push_back(Eigen::Vector3d(0, 0, 1));
 

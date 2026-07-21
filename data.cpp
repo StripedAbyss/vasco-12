@@ -1,52 +1,108 @@
 #include "data.h"
+#include "vasco/core/ContourContainment.h"
 
-void Data::ReadData(vector<vector<vector<Eigen::Vector3d>>> all_slice_points, vector<vector<vector<Eigen::Vector3d>>> all_slice_points_contain)
+void Data::ReadData(
+	vector<vector<vector<Eigen::Vector3d>>> all_slice_points,
+	vector<vector<vector<Eigen::Vector3d>>> all_slice_points_contain,
+	const vector<vector<int>>& all_contour_parent_ids)
 {
-	int total_layer, s_num, p_num;
-	double x, y, z, x2, y2;
-	total_layer = all_slice_points.size(); //层的数量
-	this->slice_points.resize(total_layer);
-	this->slice_points_contain.resize(total_layer);
-	this->z_value.resize(total_layer);
-	this->is_contour.resize(total_layer);
-	this->adjacent_points.resize(total_layer);
-	this->total_node_num = 0;
-	for (int i = 0; i < total_layer; i++) {
-		s_num = all_slice_points[i].size(); // 每层的loop数量	
-		this->total_node_num += s_num;
-		this->slice_points[i].resize(s_num);
-		this->slice_points_contain[i].resize(s_num);
-		this->z_value[i].resize(s_num);
-		this->is_contour[i].resize(s_num);
-		this->adjacent_points[i].resize(s_num);
-		for (int j = 0; j < s_num; j++) {
-			p_num = all_slice_points[i][j].size(); // 每个loop的点数量
-			for (int k = 0; k < p_num; k++) {
-				x = all_slice_points[i][j][k].x();
-				y = all_slice_points[i][j][k].y();
-				z = all_slice_points[i][j][k].z();
-				this->slice_points[i][j].push_back(Eigen::Vector2d(x, y));
-				this->z_value[i][j].push_back(z);
+	const int total_layer = static_cast<int>(all_slice_points.size());
+	slice_points.assign(total_layer, {});
+	slice_points_contain.assign(total_layer, {});
+	slice_points_holes.assign(total_layer, {});
+	source_contour_ids.assign(total_layer, {});
+	source_hole_contour_ids.assign(total_layer, {});
+	contour_parent_ids.assign(total_layer, {});
+	z_value.assign(total_layer, {});
+	is_contour.assign(total_layer, {});
+	adjacent_points.assign(total_layer, {});
+	index.clear();
+	index_inv.clear();
+	total_node_num = 0;
+
+	for (int layer_id = 0; layer_id < total_layer; ++layer_id) {
+		const int source_contour_count = static_cast<int>(all_slice_points[layer_id].size());
+		const bool has_containment_tree =
+			layer_id < static_cast<int>(all_contour_parent_ids.size())
+			&& all_contour_parent_ids[layer_id].size() == all_slice_points[layer_id].size();
+
+		std::vector<vasco::contour_containment::ContourComponent> components;
+		if (has_containment_tree) {
+			contour_parent_ids[layer_id] = all_contour_parent_ids[layer_id];
+			components = vasco::contour_containment::BuildMaterialComponents(
+				contour_parent_ids[layer_id]);
+		}
+		else {
+			contour_parent_ids[layer_id].assign(source_contour_count, -1);
+			components.reserve(source_contour_count);
+			for (int contour_id = 0; contour_id < source_contour_count; ++contour_id) {
+				vasco::contour_containment::ContourComponent component;
+				component.outer_contour_id = contour_id;
+				components.push_back(std::move(component));
 			}
-			if (all_slice_points_contain[i][j].size() != 0) {
-				for (int k = 0; k < all_slice_points_contain[i][j].size(); k++) {
-					x2 = all_slice_points_contain[i][j][k].x();
-					y2 = all_slice_points_contain[i][j][k].y();
-					this->slice_points_contain[i][j].push_back(Eigen::Vector2d(x2, y2));
+		}
+
+		const int component_count = static_cast<int>(components.size());
+		total_node_num += component_count;
+		slice_points[layer_id].resize(component_count);
+		slice_points_contain[layer_id].resize(component_count);
+		slice_points_holes[layer_id].resize(component_count);
+		source_contour_ids[layer_id].resize(component_count, -1);
+		source_hole_contour_ids[layer_id].resize(component_count);
+		z_value[layer_id].resize(component_count);
+		is_contour[layer_id].resize(component_count, false);
+		adjacent_points[layer_id].resize(component_count);
+
+		for (int component_id = 0; component_id < component_count; ++component_id) {
+			const int source_id = components[component_id].outer_contour_id;
+			if (source_id < 0 || source_id >= source_contour_count) {
+				continue;
+			}
+			source_contour_ids[layer_id][component_id] = source_id;
+
+			for (const Eigen::Vector3d& point : all_slice_points[layer_id][source_id]) {
+				slice_points[layer_id][component_id].emplace_back(point.x(), point.y());
+				z_value[layer_id][component_id].push_back(point.z());
+			}
+
+			if (has_containment_tree) {
+				for (int hole_source_id : components[component_id].hole_contour_ids) {
+					if (hole_source_id < 0 || hole_source_id >= source_contour_count) {
+						continue;
+					}
+					source_hole_contour_ids[layer_id][component_id].push_back(hole_source_id);
+					slice_points_holes[layer_id][component_id].emplace_back();
+					auto& hole = slice_points_holes[layer_id][component_id].back();
+					hole.reserve(all_slice_points[layer_id][hole_source_id].size());
+					for (const Eigen::Vector3d& point : all_slice_points[layer_id][hole_source_id]) {
+						hole.emplace_back(point.x(), point.y());
+					}
+				}
+			}
+			else if (layer_id < static_cast<int>(all_slice_points_contain.size())
+				&& source_id < static_cast<int>(all_slice_points_contain[layer_id].size())
+				&& !all_slice_points_contain[layer_id][source_id].empty()) {
+				slice_points_holes[layer_id][component_id].emplace_back();
+				auto& hole = slice_points_holes[layer_id][component_id].back();
+				hole.reserve(all_slice_points_contain[layer_id][source_id].size());
+				for (const Eigen::Vector3d& point : all_slice_points_contain[layer_id][source_id]) {
+					hole.emplace_back(point.x(), point.y());
 				}
 			}
 
-			// avoid the segment only has one point
-			if (p_num == 1) {
-				this->slice_points[i][j].push_back(Eigen::Vector2d(x + 1, y + 1));
-				this->z_value[i][j].push_back(z);
+			// Preserve the old single-hole view for existing visualization code.
+			if (!slice_points_holes[layer_id][component_id].empty()) {
+				slice_points_contain[layer_id][component_id] =
+					slice_points_holes[layer_id][component_id].front();
 			}
-			if (IsContour(i, j)) {
 
-				this->is_contour[i][j] = true;
+			if (!slice_points[layer_id][component_id].empty()) {
+				is_contour[layer_id][component_id] = IsContour(layer_id, component_id);
 			}
-			this->adjacent_points[i][j].push_back(std::make_pair(Eigen::Vector3i(-1, -1, -1), Eigen::Vector3i(-1, -1, -1)));
-			this->adjacent_points[i][j].push_back(std::make_pair(Eigen::Vector3i(-1, -1, -1), Eigen::Vector3i(-1, -1, -1)));
+			adjacent_points[layer_id][component_id].push_back(
+				std::make_pair(Eigen::Vector3i(-1, -1, -1), Eigen::Vector3i(-1, -1, -1)));
+			adjacent_points[layer_id][component_id].push_back(
+				std::make_pair(Eigen::Vector3i(-1, -1, -1), Eigen::Vector3i(-1, -1, -1)));
 		}
 	}
 	SetIndexMapping();
@@ -55,22 +111,25 @@ void Data::ReadData(vector<vector<vector<Eigen::Vector3d>>> all_slice_points, ve
 void Data::SetIndexMapping()
 {
 	int num = 0;
-	for (int i = 0; i < slice_points.size(); i++) {
-		for (int j = 0; j < slice_points[i].size(); j++) {
+	for (int i = 0; i < static_cast<int>(slice_points.size()); ++i) {
+		for (int j = 0; j < static_cast<int>(slice_points[i].size()); ++j) {
 			index[num] = std::make_pair(i, j);
 			index_inv[std::make_pair(i, j)] = num;
-			num++;
+			++num;
 		}
 	}
 }
 
 bool Data::IsContour(int i, int j)
 {
+	if (i < 0 || i >= static_cast<int>(slice_points.size())
+		|| j < 0 || j >= static_cast<int>(slice_points[i].size())
+		|| slice_points[i][j].size() < 2) {
+		return false;
+	}
 
-	Eigen::Vector2d p1 = this->slice_points[i][j][0];
-	Eigen::Vector2d p2 = this->slice_points[i][j][this->slice_points[i][j].size() - 1];
-	//std::cout << i << " " << j << " " << p1 << " " << p2 << std::endl;
-	//if (JudgePointEqual(p1, p2)) return true;
-	if (std::abs(p1.x() - p2.x()) <= 2 && std::abs(p1.y() - p2.y()) <= 2) return true;
-	else return false;
+	const Eigen::Vector2d& first = slice_points[i][j].front();
+	const Eigen::Vector2d& last = slice_points[i][j].back();
+	return std::abs(first.x() - last.x()) <= 2
+		&& std::abs(first.y() - last.y()) <= 2;
 }

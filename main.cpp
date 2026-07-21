@@ -32,14 +32,20 @@ namespace fs = std::filesystem;
 #endif
 
 
-// ¹¤¾ßº¯ÊýÉùÃ÷
+// ï¿½ï¿½ï¿½ßºï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
 void get_need_file(string path, vector<string>& file, vector<string>& file_name, string ext);
 void change_name(string my_file_path, string suff);
 vector<fs::path> collect_files(string dir);
 void remove_files(vector<fs::path> files, string dir);
 nozzle create_nozzle();
 cutter create_cutter(float tolerance);
-bool process_model(const std::string& my_file_path, const std::string& suff, const nozzle& the_nozzle, const cutter& cutting_tool);
+bool process_model(
+	const std::string& my_file_path,
+	const std::string& suff,
+	const nozzle& the_nozzle,
+	const cutter& cutting_tool,
+	bool run_subtractive_global,
+	int subtractive_global_height);
 
 
 //clock_t start_time, end_time;
@@ -47,12 +53,14 @@ bool process_model(const std::string& my_file_path, const std::string& suff, con
 int main()
 {
 	std::cout << "[Debug] Current Working Directory: "
-	          << std::filesystem::current_path() << std::endl;
+		<< std::filesystem::current_path() << std::endl;
 
 	const std::string iniPath = "input_files.ini";
 	const IniData ini = LoadIni(iniPath);
 	const std::string my_file_path = GetIniString(ini, "Input", "BaseDir", "data\\transformed_mesh_10K");
 	const std::vector<std::string> my_file_name = GetIniStringList(ini, "Input", "FileNames");
+	const bool run_subtractive_global = (GetIniInt(ini, "Run", "RunSubtractiveGlobal", 0) != 0);
+	const int subtractive_global_height = GetIniInt(ini, "Run", "SubtractiveGlobalHeight", 3);
 
 	if (my_file_name.empty()) {
 		std::cerr << "[main] No input file names found in " << iniPath << std::endl;
@@ -64,20 +72,20 @@ int main()
 	const cutter cutting_tool = create_cutter(tolerance);
 
 	for (const auto& suff : my_file_name) {
-		process_model(my_file_path, suff, the_nozzle, cutting_tool);
+		process_model(my_file_path, suff, the_nozzle, cutting_tool, run_subtractive_global, subtractive_global_height);
 	}
 
 	return 0;
 }
 
-// ±éÀúÎÄ¼þ¼ÐÖÐÖ¸¶¨ÎÄ¼þºó×ºµÄÎÄ¼þ
+// ï¿½ï¿½ï¿½ï¿½ï¿½Ä¼ï¿½ï¿½ï¿½ï¿½ï¿½Ö¸ï¿½ï¿½ï¿½Ä¼ï¿½ï¿½ï¿½×ºï¿½ï¿½ï¿½Ä¼ï¿½
 void get_need_file(string path, vector<string>& file, vector<string>& file_name, string ext)
 {
 
 	fs::path dir(path);
 	std::error_code ec;
 
-	// Ä¿Â¼Ð£Ñé
+	// Ä¿Â¼Ð£ï¿½ï¿½
 	if (!fs::exists(dir, ec) || !fs::is_directory(dir, ec)) {
 		std::cerr << "[get_need_file] Directory not found or not a directory: " << path
 			<< " (" << ec.message() << ")" << std::endl;
@@ -113,7 +121,7 @@ void get_need_file(string path, vector<string>& file, vector<string>& file_name,
 		file_name.emplace_back(std::move(pr.second));
 	}
 }
-// ¼Ó0_0
+// ï¿½ï¿½0_0
 void change_name(string my_file_path, string suff)
 {
 	vector<string> my_file;
@@ -131,7 +139,7 @@ void change_name(string my_file_path, string suff)
 
 	}
 }
-// ÕÒµ½Ä¿±êÎÄ¼þ¼ÐÖÐµÄËùÓÐÎÄ¼þ
+// ï¿½Òµï¿½Ä¿ï¿½ï¿½ï¿½Ä¼ï¿½ï¿½ï¿½ï¿½Ðµï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ä¼ï¿½
 vector<fs::path> collect_files(string dir)
 {
 	auto files = vector<fs::path>();
@@ -146,7 +154,7 @@ vector<fs::path> collect_files(string dir)
 
 	return files;
 }
-// ÒÆ¶¯ÎÄ¼þ
+// ï¿½Æ¶ï¿½ï¿½Ä¼ï¿½
 void remove_files(vector<fs::path> files, string dir)
 {
 	fs::path new_dir = fs::path(dir);
@@ -179,9 +187,9 @@ cutter create_cutter(float tolerance)
 {
 	cutter cutting_tool;
 	cutting_tool.cylinder_r = 1.5;
-	cutting_tool.cylinder_height = 20;
+	cutting_tool.cylinder_height = 25;
 	cutting_tool.ball_r = 1.5;
-	cutting_tool.carriage_r = 25;
+	cutting_tool.carriage_r = 20;
 	cutting_tool.carriage_height = 30;
 
 	cutting_tool.cylinder_r *= (1 + tolerance);
@@ -192,7 +200,13 @@ cutter create_cutter(float tolerance)
 	return cutting_tool;
 }
 
-bool process_model(const std::string& my_file_path, const std::string& suff, const nozzle& the_nozzle, const cutter& cutting_tool)
+bool process_model(
+	const std::string& my_file_path,
+	const std::string& suff,
+	const nozzle& the_nozzle,
+	const cutter& cutting_tool,
+	bool run_subtractive_global,
+	int subtractive_global_height)
 {
 	std::string file_name = my_file_path + "\\" + suff + "\\" + suff;
 	std::string path_obj = file_name + ".obj";
@@ -213,17 +227,24 @@ bool process_model(const std::string& my_file_path, const std::string& suff, con
 	vasco::core::getMeshNormal(V, F, N);
 
 	Katana::Instance().stl.saveStlFromObj(file_name + "-0_0" + ".stl", V, F);
-	igl::writeOBJ(file_name + "-0_0" + ".obj", V, F); //ÐÂ¼ÓµÄÓï¾ä£¬¼ÓÁËÒÔºóbeamsearchÈ±µÄobj²¹ÉÏÁË
-	HybridManufacturing hybrid_manufacturing(file_name, suff, V, F, N);
+	igl::writeOBJ(file_name + "-0_0" + ".obj", V, F); //ï¿½Â¼Óµï¿½ï¿½ï¿½ä£¬ï¿½ï¿½ï¿½ï¿½ï¿½Ôºï¿½beamsearchÈ±ï¿½ï¿½objï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
+	HybridManufacturing hybrid_manufacturing(my_file_path, suff, V, F, N);
 	hybrid_manufacturing.open_vis_voronoi = 0;
-	hybrid_manufacturing.open_vis_red_points = 0;
+	hybrid_manufacturing.open_vis_red_points = 1;
 	hybrid_manufacturing.open_vis_green_points = 0;
-	hybrid_manufacturing.open_vis_stair_case = 0;
-	hybrid_manufacturing.open_change_orientation = 1;
+	hybrid_manufacturing.open_vis_stair_case = 1;
+	hybrid_manufacturing.open_vis_additive_accessibility_debug = 0;
+	hybrid_manufacturing.open_change_orientation = 0;
 
-	//cutter cutting_tool_sub = cutting_tool;
-	//hybrid_manufacturing.subtractive_accessibility_decomposition_global(3, cutting_tool_sub);
-	//return 0;
+	if (run_subtractive_global) {
+		cutter cutting_tool_sub = cutting_tool;
+		std::cout << "[main] RunSubtractiveGlobal=1, height="
+			<< subtractive_global_height << std::endl;
+		hybrid_manufacturing.subtractive_accessibility_decomposition_global(
+			subtractive_global_height,
+			cutting_tool_sub);
+		return true;
+	}
 
 	hybrid_manufacturing.InitializeVoronoi();
 	int flag = hybrid_manufacturing.CollisionDetectionForSubtractiveManufacturing(cutting_tool);

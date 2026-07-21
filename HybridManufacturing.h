@@ -140,11 +140,14 @@ class HybridManufacturing
 public:
 	using CutLayer = vector<cv::Point3d>;
 	using CutLayerVector = vector<vector<cv::Point3d>>;
+	// Hole contours grouped by their corresponding outer cut layer.
+	using CutLayerHoles = vector<CutLayerVector>;
 	using OrientationScores = vector<all_value>;
 
 	struct BeamTreeEntry {
 		CutLayerVector layers;
 		CutLayerVector contain;
+		CutLayerHoles holes;
 		vector<int> cut_layers;
 		vector<int> cut_layers_dependency_layer;
 		vector<Eigen::MatrixXd> fragile_v;
@@ -155,6 +158,9 @@ public:
 		int continue_id = -1;
 		int parent_id = -1;
 		int pre_queue_index = -1;
+		std::string source_input_file;
+		std::string patch_output_file;
+		int subtractive_accessibility_patch_count = 0;
 		bool error = false;
 	};
 
@@ -200,6 +206,7 @@ public:
 	void CutMesh(
 		CutLayerVector all_layers,
 		CutLayerVector all_layers_contain,
+		CutLayerHoles all_layers_holes,
 		CutLayerVector all_cut_layers,
 		Eigen::Vector3d vector_after,
 		int height_of_beam_search,
@@ -217,7 +224,7 @@ public:
 		int id_continue,
 		vector<int> flag_cut_layers_is_hole);
 
-	void subtractive_accessibility_decomposition(
+	int subtractive_accessibility_decomposition(
 		vector<TRiangle> need_detect_triangle,
 		int height_of_beam_search,
 		int cont_number_of_queue,
@@ -266,10 +273,14 @@ public:
 	bool open_vis_green_points;
 	bool open_change_orientation;
 	bool open_vis_stair_case;
+	bool open_vis_additive_accessibility_debug;
 
 private:
+	std::string VisDir() const;
+	std::string VisPath(const std::string& file_name) const;
+
 	void InitializeSurfaceMeshFromVF();
-	void PrepareOuterBeamSearchNode(
+	bool PrepareOuterBeamSearchNode(
 		queue<int>& last_step_nodes,
 		vector<vector<bool>>& is_fragile_V_2,
 		int& now_last_node,
@@ -384,15 +395,37 @@ private:
 		const Eigen::Vector3d& vector_before,
 		const Eigen::Vector3d& vector_after) const;
 
+	bool SaveRemovedSolidAfterCut(
+		const Slicer_2& remaining_slicer,
+		const std::vector<TRiangle>& remove_triangles,
+		const std::vector<int>& contact_face_ids,
+		const Eigen::Vector3d& vector_after,
+		const Eigen::Vector3d& vector_before,
+		int height_of_beam_search,
+		int cont_number_of_queue,
+		bool judge_continue_additive,
+		int id_continue) const;
+
+	void AppendCutBoundaryCaps(
+		std::vector<std::vector<std::vector<int>>> loops_by_layer,
+		const std::vector<int>& flag_cut_layers_is_hole,
+		const std::map<int, int>& follow_index,
+		const std::vector<int>& all_cut_layers_dependency_layer,
+		Slicer_2& all_slicer,
+		std::vector<int>& all_cap_face_ids,
+		std::vector<int>& id_contact_faces) const;
+
 	void RotateLayersForVisualization(
 		vector<vector<cv::Point3d>>& all_layers,
 		vector<vector<cv::Point3d>>& all_layers_contain,
+		CutLayerHoles& all_layers_holes,
 		const Eigen::Vector3d& vector_after,
 		const Eigen::Vector3d& vector_before) const;
 
 	void VisualizeCutLayers(
 		const vector<vector<cv::Point3d>>& all_layers,
 		const vector<vector<cv::Point3d>>& all_layers_contain,
+		const CutLayerHoles& all_layers_holes,
 		int height_of_beam_search,
 		int cont_number_of_queue,
 		int index_of_pre_node,
@@ -464,11 +497,13 @@ private:
 	vector<vector<area_S>> ori_all_the_covering_points;
 	vector<vector<vector<cv::Point3d>>> all_solutions_of_selected_layers;
 	vector<vector<vector<cv::Point3d>>> all_solutions_of_selected_layers_contain;
+	vector<CutLayerHoles> all_solutions_of_selected_layer_holes;
 
 	double time_build_subtractive_graph;
 	int num_inaccessible_points;
 	int cont_extra_additive_orientation;
 	string file_name;
+	string input_folder;
 	string suf;
 	ContactFaceTriangulationMode contact_face_triangulation_mode = ContactFaceTriangulationMode::Earcut;
 
@@ -480,6 +515,12 @@ private:
 
 	Slicer_2 MergeBlockPatchesWithDedup(
 		int max_patch_index,
+		std::vector<int>& merged_vertex_source_patch_id,
+		std::vector<int>& merged_face_source_patch_id,
+		double merge_eps = 1e-6) const;
+
+	Slicer_2 MergeBlockPatchesWithDedup(
+		const std::vector<std::string>& patch_files,
 		std::vector<int>& merged_vertex_source_patch_id,
 		std::vector<int>& merged_face_source_patch_id,
 		double merge_eps = 1e-6) const;

@@ -31,6 +31,104 @@ static std::vector<Eigen::Vector2d> SliceContourToPolygon(const Polyline_type& c
 	}
 	return polygon;
 }
+
+// Tests whether a point lies in the offset band of any component boundary.
+// Both the outer contour and every hole contour contribute supporting walls.
+static bool PointInsideComponentBoundaryBand(
+	Polygon& outer_boundary_band,
+	std::vector<Polygon>& hole_boundary_bands,
+	const Eigen::Vector2d& point)
+{
+	if (outer_boundary_band.JudgePointInside(point)) {
+		return true;
+	}
+	for (Polygon& hole_boundary_band : hole_boundary_bands) {
+		if (hole_boundary_band.JudgePointInside(point)) {
+			return true;
+		}
+	}
+	return false;
+}
+
+// Tests whether any outer or hole boundary pair is closer than the nozzle radius.
+// An AABB rejection keeps distant component pairs out of the quadratic point test.
+static bool ComponentBoundariesWithinDistance(
+	const Data& data,
+	std::size_t first_layer,
+	std::size_t first_component,
+	std::size_t second_layer,
+	std::size_t second_component,
+	double distance_squared)
+{
+	const auto test_boundary_pair = [distance_squared](
+		const std::vector<Eigen::Vector2d>& first,
+		const std::vector<Eigen::Vector2d>& second) {
+		if (first.empty() || second.empty()) {
+			return false;
+		}
+
+		double first_min_x = first.front().x();
+		double first_max_x = first.front().x();
+		double first_min_y = first.front().y();
+		double first_max_y = first.front().y();
+		for (const Eigen::Vector2d& point : first) {
+			first_min_x = std::min(first_min_x, point.x());
+			first_max_x = std::max(first_max_x, point.x());
+			first_min_y = std::min(first_min_y, point.y());
+			first_max_y = std::max(first_max_y, point.y());
+		}
+
+		double second_min_x = second.front().x();
+		double second_max_x = second.front().x();
+		double second_min_y = second.front().y();
+		double second_max_y = second.front().y();
+		for (const Eigen::Vector2d& point : second) {
+			second_min_x = std::min(second_min_x, point.x());
+			second_max_x = std::max(second_max_x, point.x());
+			second_min_y = std::min(second_min_y, point.y());
+			second_max_y = std::max(second_max_y, point.y());
+		}
+
+		const double distance = std::sqrt(std::max(0.0, distance_squared));
+		if (first_max_x + distance < second_min_x
+			|| second_max_x + distance < first_min_x
+			|| first_max_y + distance < second_min_y
+			|| second_max_y + distance < first_min_y) {
+			return false;
+		}
+
+		for (const Eigen::Vector2d& a : first) {
+			for (const Eigen::Vector2d& b : second) {
+				if ((a - b).squaredNorm() < distance_squared) {
+					return true;
+				}
+			}
+		}
+		return false;
+		};
+
+	std::vector<const std::vector<Eigen::Vector2d>*> first_boundaries{
+		&data.slice_points[first_layer][first_component]
+	};
+	std::vector<const std::vector<Eigen::Vector2d>*> second_boundaries{
+		&data.slice_points[second_layer][second_component]
+	};
+	for (const auto& hole : data.slice_points_holes[first_layer][first_component]) {
+		first_boundaries.push_back(&hole);
+	}
+	for (const auto& hole : data.slice_points_holes[second_layer][second_component]) {
+		second_boundaries.push_back(&hole);
+	}
+
+	for (const auto* first : first_boundaries) {
+		for (const auto* second : second_boundaries) {
+			if (test_boundary_pair(*first, *second)) {
+				return true;
+			}
+		}
+	}
+	return false;
+}
 }
 
 Layer_Graph::Layer_Graph(const Data& data)
@@ -44,6 +142,7 @@ Layer_Graph::Layer_Graph(const Data& data)
 	this->G.resize(maxn);
 	this->G_2.resize(maxn);
 	this->G_3.resize(maxn);
+	this->cont_normal_dependency_edges = 0;
 }
 
 Layer_Graph::~Layer_Graph()
@@ -74,12 +173,38 @@ void Layer_Graph::GetTrianglesForSurfaceMeshSlices(
 {
 	std::vector<std::vector<std::vector<int>>> contour_face_ids;
 	std::vector<Eigen::Vector3d> face_normals;
-	for (const auto& slice : slices) {
+	for (std::size_t layer_id = 0; layer_id < data.slice_points.size(); ++layer_id) {
 		contour_face_ids.push_back({});
-		for (const auto& face_id_list : slice.contour_face_ids) {
+		if (layer_id >= slices.size()) {
+			continue;
+		}
+		const auto& slice = slices[layer_id];
+		for (std::size_t component_id = 0;
+			component_id < data.slice_points[layer_id].size();
+			++component_id) {
 			contour_face_ids.back().push_back({});
-			for (const auto& face_index : face_id_list) {
-				contour_face_ids.back().back().push_back(static_cast<int>(face_index));
+			auto& component_face_ids = contour_face_ids.back().back();
+			if (layer_id >= data.source_contour_ids.size()
+				|| layer_id >= data.source_hole_contour_ids.size()
+				|| component_id >= data.source_contour_ids[layer_id].size()
+				|| component_id >= data.source_hole_contour_ids[layer_id].size()) {
+				continue;
+			}
+			const int source_id = data.source_contour_ids[layer_id][component_id];
+			if (source_id >= 0
+				&& static_cast<std::size_t>(source_id) < slice.contour_face_ids.size()) {
+				for (const auto& face_index : slice.contour_face_ids[static_cast<std::size_t>(source_id)]) {
+					component_face_ids.push_back(static_cast<int>(face_index));
+				}
+			}
+			for (int hole_source_id : data.source_hole_contour_ids[layer_id][component_id]) {
+				if (hole_source_id < 0
+					|| static_cast<std::size_t>(hole_source_id) >= slice.contour_face_ids.size()) {
+					continue;
+				}
+				for (const auto& face_index : slice.contour_face_ids[static_cast<std::size_t>(hole_source_id)]) {
+					component_face_ids.push_back(static_cast<int>(face_index));
+				}
 			}
 		}
 		for (const auto& normal : slice.face_normals) {
@@ -92,40 +217,40 @@ void Layer_Graph::GetTrianglesForSurfaceMeshSlices(
 void Layer_Graph::GenerateDependencyEdgesFromSurfaceMeshSlices( //现在是只根据点是否在上一个层的轮廓内来生成依赖边，可以改成根据边是否穿过上一个层的轮廓来生成依赖边
 	const std::vector<SurfaceMeshSliceData>& slices)
 {
-	for (size_t i = 1; i < slices.size(); ++i) {
+	for (std::size_t i = 1; i < data.slice_points.size(); ++i) {
 		std::vector<Polygon> last_layer_polygons;
-		for (const auto& contour : slices[i - 1].contour_points) {
-			std::vector<Eigen::Vector2d> polygon_points;
-			polygon_points.reserve(contour.size());
-			for (const auto& p : contour) {
-				polygon_points.emplace_back(p.x(), p.y());
+		std::vector<std::vector<Polygon>> last_layer_hole_polygons;
+		last_layer_polygons.reserve(data.slice_points[i - 1].size());
+		last_layer_hole_polygons.resize(data.slice_points[i - 1].size());
+		for (std::size_t component_id = 0;
+			component_id < data.slice_points[i - 1].size();
+			++component_id) {
+			last_layer_polygons.emplace_back(
+				ConstructPolygonPoints(data.slice_points[i - 1][component_id], dependence_offset));
+			for (const auto& hole : data.slice_points_holes[i - 1][component_id]) {
+				last_layer_hole_polygons[component_id].emplace_back(
+					ConstructPolygonPoints(hole, dependence_offset));
 			}
-			auto offset_polygon_points = ConstructPolygonPoints(polygon_points, dependence_offset);
-
-			last_layer_polygons.push_back(offset_polygon_points);
 		}
-		for (size_t j = 0; j < slices[i].contour_points.size(); ++j) {
-			for (size_t m = 0; m < last_layer_polygons.size(); ++m) {
-				for (const auto& point : slices[i].contour_points[j]) {
-					Point_2 test_point_2(point.x(), point.y());
-					Eigen::Vector2d test_point(point.x(), point.y());
 
-
-					//if (CGAL::bounded_side_2(last_layer_polygons[m].vertices_begin(), last_layer_polygons[m].vertices_end(), test_point_2, K()) != CGAL::ON_UNBOUNDED_SIDE) {
-					//	const int from_id = data.index_inv[std::make_pair(static_cast<int>(i - 1), static_cast<int>(m))];
-					//	const int to_id = data.index_inv[std::make_pair(static_cast<int>(i), static_cast<int>(j))];
-					//	this->AddEdge(from_id, to_id);
-					//	temp_edges.push_back(make_pair(from_id, to_id));
-					//	break;
-					//}
-
-					if (last_layer_polygons[m].JudgePointInside(test_point)) {
-						const int from_id = data.index_inv[std::make_pair(static_cast<int>(i - 1), static_cast<int>(m))];
-						const int to_id = data.index_inv[std::make_pair(static_cast<int>(i), static_cast<int>(j))];
-						this->AddEdge(from_id, to_id);
-						temp_edges.push_back(make_pair(from_id, to_id));
-						break;
+		for (std::size_t j = 0; j < data.slice_points[i].size(); ++j) {
+			for (std::size_t m = 0; m < last_layer_polygons.size(); ++m) {
+				for (const Eigen::Vector2d& test_point : data.slice_points[i][j]) {
+					if (!PointInsideComponentBoundaryBand(
+						last_layer_polygons[m],
+						last_layer_hole_polygons[m],
+						test_point)) {
+						continue;
 					}
+					const int from_id = data.index_inv[std::make_pair(
+						static_cast<int>(i - 1),
+						static_cast<int>(m))];
+					const int to_id = data.index_inv[std::make_pair(
+						static_cast<int>(i),
+						static_cast<int>(j))];
+					this->AddEdge(from_id, to_id);
+					temp_edges.push_back(make_pair(from_id, to_id));
+					break;
 				}
 			}
 		}
@@ -144,9 +269,9 @@ void Layer_Graph::CollisionDetectionForAdditiveManufacturingFromSurfaceMeshSlice
 
 	vector<pair<int, int>> temp_collision_edges;
 
-	for (size_t i = 0; i < slices.size(); ++i) {
-		for (size_t j = 0; j < slices[i].contour_points.size(); ++j) {
-			for (size_t ii = i + 1; ii < slices.size(); ++ii) {
+	for (std::size_t i = 0; i < data.slice_points.size(); ++i) {
+		for (std::size_t j = 0; j < data.slice_points[i].size(); ++j) {
+			for (std::size_t ii = i + 1; ii < data.slice_points.size(); ++ii) {
 				double circle_r;
 				if (slices[ii].layer_z - slices[i].layer_z < 0) {
 					std::cout << "[Layer_Graph::CollisionDetectionForAdditiveManufacturingFromSurfaceMeshSlices] Warning: Layer " << ii << " is below layer " << i << ". Skipping collision detection for this pair of layers." << std::endl;
@@ -161,29 +286,33 @@ void Layer_Graph::CollisionDetectionForAdditiveManufacturingFromSurfaceMeshSlice
 				else {
 					circle_r = the_nozzle.upper_surface_r;
 				}
-				for (size_t jj = 0; jj < slices[ii].contour_points.size(); ++jj) {
+				for (std::size_t jj = 0; jj < data.slice_points[ii].size(); ++jj) {
+					const int lower_layer_id = static_cast<int>(i);
+					const int lower_component_id = static_cast<int>(j);
+					const int upper_layer_id = static_cast<int>(ii);
+					const int upper_component_id = static_cast<int>(jj);
 					bool jud_collision = false;
 					if (layer_distance > the_nozzle.nozzle__H_total) {
 						jud_collision = true;
-						temp_collision_edges.push_back(make_pair(data.index_inv[std::make_pair(i, j)], data.index_inv[std::make_pair(ii, jj)]));
+						temp_collision_edges.push_back(make_pair(
+							data.index_inv[std::make_pair(lower_layer_id, lower_component_id)],
+							data.index_inv[std::make_pair(upper_layer_id, upper_component_id)]));
 						continue;
 					}
 					else {
-						for (const auto& p1 : slices[i].contour_points[j]) {
-							for (const auto& p2 : slices[ii].contour_points[jj]) {
-								if (pow(p2.x() - p1.x(), 2) + pow(p2.y() - p1.y(), 2) - pow(circle_r, 2) < 0) {
-									jud_collision = true;
-									break;
-								}
-							}
-							if (jud_collision) {
-								break;
-							}
-						}
+						jud_collision = ComponentBoundariesWithinDistance(
+							data,
+							i,
+							j,
+							ii,
+							jj,
+							circle_r * circle_r);
 					}
 					if (jud_collision) {
-						const int from_id = data.index_inv[std::make_pair(static_cast<int>(i), static_cast<int>(j))];
-						const int to_id = data.index_inv[std::make_pair(static_cast<int>(ii), static_cast<int>(jj))];
+						const int from_id =
+							data.index_inv[std::make_pair(lower_layer_id, lower_component_id)];
+						const int to_id =
+							data.index_inv[std::make_pair(upper_layer_id, upper_component_id)];
 						//this->AddEdge_2(from_id, to_id);
 						//temp_edges.push_back(make_pair(from_id, to_id));
 						temp_collision_edges.push_back(make_pair(from_id, to_id));
@@ -249,10 +378,7 @@ void Layer_Graph::BuildLayerGraphFromSurfaceMeshSlices(
 	const std::vector<SurfaceMeshSliceData>& slices,
 	nozzle the_nozzle)
 {
-	this->total_node_num = 0;
-	for (const auto& slice : slices) {
-		this->total_node_num += static_cast<int>(slice.contour_points.size());
-	}
+	this->total_node_num = data.total_node_num;
 	this->in_degree.assign(this->total_node_num, 0);
 	this->out_degree.assign(this->total_node_num, 0);
 	this->node_visited.assign(this->total_node_num, false);
@@ -261,19 +387,9 @@ void Layer_Graph::BuildLayerGraphFromSurfaceMeshSlices(
 	this->G_2.resize(maxn);
 	this->G_3.resize(maxn);
 	this->temp_edges.clear();
+	this->cont_normal_dependency_edges = 0;
 	this->all_triangles_of_layers.clear();
 	this->is_the_layer_self_suppot.clear();
-	this->data.total_node_num = this->total_node_num;
-	this->data.index.clear();
-	this->data.index_inv.clear();
-	int flat_id = 0;
-	for (size_t i = 0; i < slices.size(); ++i) {
-		for (size_t j = 0; j < slices[i].contour_points.size(); ++j) {
-			this->data.index[flat_id] = std::make_pair(static_cast<int>(i), static_cast<int>(j));
-			this->data.index_inv[std::make_pair(static_cast<int>(i), static_cast<int>(j))] = flat_id;
-			++flat_id;
-		}
-	}
 	this->GetTrianglesForSurfaceMeshSlices(slices, Eigen::Vector3d(0, 0, 1), 0, 0);
 	this->GenerateDependencyEdgesFromSurfaceMeshSlices(slices);
 	this->CollisionDetectionForAdditiveManufacturingFromSurfaceMeshSlices(slices, the_nozzle);
@@ -387,27 +503,52 @@ void Layer_Graph::GetTrianglesForLayers(vector<vector<vector<Vertex>>> all_slice
 
 void Layer_Graph::GenerateDependencyEdges()
 {
-	for (int i = 1; i < data.slice_points.size(); i++) {
-		//get (i-1) layer segment's contour
-		std::vector<Polygon> Last_layer_polygons;
-		for (int j = 0; j < data.slice_points[i - 1].size(); j++) {
-			Last_layer_polygons.push_back(Polygon(ConstructPolygonPoints(data.slice_points[i - 1][j], dependence_offset)));
+	for (std::size_t layer_id = 1; layer_id < data.slice_points.size(); ++layer_id) {
+		std::vector<Polygon> lower_outer_polygons;
+		std::vector<std::vector<Polygon>> lower_hole_polygons;
+		lower_outer_polygons.reserve(data.slice_points[layer_id - 1].size());
+		lower_hole_polygons.resize(data.slice_points[layer_id - 1].size());
+
+		for (std::size_t component_id = 0;
+			component_id < data.slice_points[layer_id - 1].size();
+			++component_id) {
+			lower_outer_polygons.emplace_back(
+				ConstructPolygonPoints(
+					data.slice_points[layer_id - 1][component_id],
+					dependence_offset));
+			for (const auto& hole : data.slice_points_holes[layer_id - 1][component_id]) {
+				lower_hole_polygons[component_id].emplace_back(
+					ConstructPolygonPoints(hole, dependence_offset));
+			}
 		}
-		// generate dependency edges;
-		for (int j = 0; j < data.slice_points[i].size(); j++) {
-			for (int m = 0; m < Last_layer_polygons.size(); m++) {
-				for (int k = 0; k < data.slice_points[i][j].size(); k++) {
-					if (Last_layer_polygons[m].JudgePointInside(data.slice_points[i][j][k])) {
-						this->AddEdge(data.index_inv[std::make_pair(i - 1, m)], data.index_inv[std::make_pair(i, j)]);
-						temp_edges.push_back(make_pair(data.index_inv[std::make_pair(i - 1, m)], data.index_inv[std::make_pair(i, j)]));
-						break;
+
+		for (std::size_t upper_component_id = 0;
+			upper_component_id < data.slice_points[layer_id].size();
+			++upper_component_id) {
+			for (std::size_t lower_component_id = 0;
+				lower_component_id < lower_outer_polygons.size();
+				++lower_component_id) {
+				for (const Eigen::Vector2d& test_point : data.slice_points[layer_id][upper_component_id]) {
+					if (!PointInsideComponentBoundaryBand(
+						lower_outer_polygons[lower_component_id],
+						lower_hole_polygons[lower_component_id],
+						test_point)) {
+						continue;
 					}
+
+					const int from_id = data.index_inv[std::make_pair(
+						static_cast<int>(layer_id - 1),
+						static_cast<int>(lower_component_id))];
+					const int to_id = data.index_inv[std::make_pair(
+						static_cast<int>(layer_id),
+						static_cast<int>(upper_component_id))];
+					this->AddEdge(from_id, to_id);
+					temp_edges.emplace_back(from_id, to_id);
+					break;
 				}
 			}
 		}
 	}
-
-	
 }
 
 void Layer_Graph::BuildLayerGraph(nozzle the_nozzle)
@@ -1469,16 +1610,13 @@ void Layer_Graph::CollisionDetectionForAdditiveManufacturing(nozzle the_nozzle)
 						temp_collision_edges.push_back(make_pair(data.index_inv[std::make_pair(i, j)], data.index_inv[std::make_pair(ii, jj)]));
 						continue;
 					}
-					for (int k = 0; k < data.slice_points[i][j].size(); k += 20) { 
-						for (int kk = 0; kk < data.slice_points[ii][jj].size(); kk += 20) {
-							if (pow(data.slice_points[ii][jj][kk].x() - data.slice_points[i][j][k].x(), 2) + pow(data.slice_points[ii][jj][kk].y() - data.slice_points[i][j][k].y(), 2) - pow(circle_r, 2) < 0) {
-								jud_collision = true;
-								break;
-							}
-						}
-						if (jud_collision == true)
-							break;
-					}
+					jud_collision = ComponentBoundariesWithinDistance(
+						data,
+						i,
+						j,
+						ii,
+						jj,
+						circle_r * circle_r);
 					if (jud_collision == true) {
 						temp_collision_edges.push_back(make_pair(data.index_inv[std::make_pair(i, j)], data.index_inv[std::make_pair(ii, jj)]));
 					}

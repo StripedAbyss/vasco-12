@@ -3,6 +3,7 @@
 #include "vasco/core/ContactTriangulation.h"
 #include "vasco/core/ContourContainment.h"
 #include "vasco/core/MeshValidation.h"
+#include "vasco/core/PatchBoundaryStitching.h"
 #include "vasco/core/SlicerMeshAdapter.h"
 #include<igl/readOBJ.h>
 #include<igl/writeOBJ.h>
@@ -192,6 +193,83 @@ namespace
 			std::unique(patch_files_depth_from_final.begin(), patch_files_depth_from_final.end()),
 			patch_files_depth_from_final.end());
 		return patch_files_depth_from_final;
+	}
+
+	// Removes vertices that are not referenced by any patch face while preserving
+	// face order, vertex order, and all valid face geometry.
+	bool CompactPatchToReferencedVertices(Slicer_2& patch, std::size_t& removed_vertex_count)
+	{
+		removed_vertex_count = 0;
+		std::vector<bool> referenced_vertices(patch.positions.size(), false);
+		for (const auto& triangle : patch.triangles) {
+			for (int corner = 0; corner < 3; ++corner) {
+				const int vertex_index = triangle[corner];
+				if (vertex_index < 0 || vertex_index >= static_cast<int>(patch.positions.size())) {
+					return false;
+				}
+				referenced_vertices[vertex_index] = true;
+			}
+		}
+
+		std::vector<int> old_to_new(patch.positions.size(), -1);
+		std::vector<Slicer_2::Vec3> compact_positions;
+		compact_positions.reserve(patch.positions.size());
+		for (std::size_t old_index = 0; old_index < patch.positions.size(); ++old_index) {
+			if (!referenced_vertices[old_index]) {
+				continue;
+			}
+			old_to_new[old_index] = static_cast<int>(compact_positions.size());
+			compact_positions.push_back(patch.positions[old_index]);
+		}
+
+		for (auto& triangle : patch.triangles) {
+			for (int corner = 0; corner < 3; ++corner) {
+				triangle[corner] = old_to_new[triangle[corner]];
+			}
+		}
+
+		removed_vertex_count = patch.positions.size() - compact_positions.size();
+		patch.positions.swap(compact_positions);
+		return true;
+	}
+
+	// Resolves cross-patch boundary T-junctions before graph-cut adjacency is built
+	// and reports the topology changes made by the stitching module.
+	bool StitchMergedPatchBoundariesForGraphCut(
+		Slicer_2& merged_patch,
+		std::vector<int>& merged_face_source_patch_id,
+		const std::string& context)
+	{
+		vasco::patch_boundary_stitching::StitchOptions options;
+		vasco::patch_boundary_stitching::StitchStats stats;
+		const bool succeeded = vasco::patch_boundary_stitching::StitchPatchBoundariesWithTolerance(
+			merged_patch,
+			merged_face_source_patch_id,
+			options,
+			stats);
+
+		std::cout << "[PatchBoundaryStitching] " << context
+			<< ": success=" << succeeded
+			<< ", model_diagonal=" << stats.model_diagonal
+			<< ", model_tolerance=" << stats.model_tolerance
+			<< ", initial_boundary_edges=" << stats.initial_boundary_edge_count
+			<< ", initial_t_junctions=" << stats.initial_t_junction_count
+			<< ", projected_vertices=" << stats.projected_vertex_count
+			<< ", split_edges=" << stats.split_edge_count
+			<< ", split_faces=" << stats.split_face_count
+			<< ", added_faces=" << stats.added_face_count
+			<< ", rejected_candidates=" << stats.rejected_candidate_count
+			<< ", remaining_t_junctions=" << stats.remaining_t_junction_count
+			<< ", final_boundary_edges=" << stats.final_boundary_edge_count
+			<< ", iterations=" << stats.iteration_count
+			<< std::endl;
+
+		if (!succeeded || stats.remaining_t_junction_count != 0) {
+			std::cerr << "[PatchBoundaryStitching] Refuse to build graph-cut adjacency from "
+				<< "an invalid or incompletely stitched mesh: " << context << std::endl;
+			return false;
+		}
+		return true;
 	}
 
 	struct LayerContainmentPolygon {
@@ -2202,6 +2280,70 @@ namespace
 		return loops_by_layer;
 	}
 
+	struct RemainingCutBoundaryLoopStats {
+		std::size_t input_loop_count = 0;
+		std::size_t retained_loop_count = 0;
+		std::size_t discarded_orphan_loop_count = 0;
+		std::size_t partial_boundary_loop_count = 0;
+	};
+
+	// Keeps only cut loops that are actual open boundaries of the remaining mesh.
+	// A loop with no remaining boundary edges belongs entirely to the removed side and
+	// must not be capped; a partially matching loop indicates inconsistent face removal.
+	std::vector<std::vector<std::vector<int>>> FilterCutLoopsToRemainingMeshBoundary(
+		const Slicer_2& remaining_mesh,
+		const std::vector<std::vector<std::vector<int>>>& loops_by_layer,
+		RemainingCutBoundaryLoopStats& stats,
+		bool& all_loops_valid)
+	{
+		stats = {};
+		std::unordered_map<std::uint64_t, std::size_t> remaining_edge_face_counts;
+		remaining_edge_face_counts.reserve(remaining_mesh.triangles.size() * 2 + 1);
+		for (const auto& triangle : remaining_mesh.triangles) {
+			for (int edge_index = 0; edge_index < 3; ++edge_index) {
+				++remaining_edge_face_counts[EncodeCutEdge(
+					triangle[edge_index],
+					triangle[(edge_index + 1) % 3])];
+			}
+		}
+
+		std::vector<std::vector<std::vector<int>>> filtered_loops(loops_by_layer.size());
+		for (std::size_t layer_id = 0; layer_id < loops_by_layer.size(); ++layer_id) {
+			for (const auto& loop : loops_by_layer[layer_id]) {
+				++stats.input_loop_count;
+				std::size_t remaining_boundary_edge_count = 0;
+				for (std::size_t vertex_index = 0; vertex_index < loop.size(); ++vertex_index) {
+					const std::uint64_t edge = EncodeCutEdge(
+						loop[vertex_index],
+						loop[(vertex_index + 1) % loop.size()]);
+					const auto edge_it = remaining_edge_face_counts.find(edge);
+					if (edge_it != remaining_edge_face_counts.end() && edge_it->second == 1) {
+						++remaining_boundary_edge_count;
+					}
+				}
+
+				if (remaining_boundary_edge_count == loop.size()) {
+					filtered_loops[layer_id].push_back(loop);
+					++stats.retained_loop_count;
+					continue;
+				}
+				if (remaining_boundary_edge_count == 0) {
+					++stats.discarded_orphan_loop_count;
+					continue;
+				}
+
+				++stats.partial_boundary_loop_count;
+				all_loops_valid = false;
+				std::cerr << "[HybridManufacturing::CutMesh] Cut loop only partially belongs to "
+					<< "the remaining mesh boundary: layer=" << layer_id
+					<< ", boundary_edges=" << remaining_boundary_edge_count
+					<< ", loop_edges=" << loop.size()
+					<< std::endl;
+			}
+		}
+		return filtered_loops;
+	}
+
 	double CutRingSignedArea(const std::vector<int>& ring, const Slicer_2& slicer)
 	{
 		double area_twice = 0.0;
@@ -4154,10 +4296,19 @@ Slicer_2 HybridManufacturing::MergeBlockPatchesWithDedup(
 			std::cout << "[Warn] cannot load ancestor patch file: " << patch_file << std::endl;
 			continue;
 		}
+		const std::size_t original_vertex_count = patch.positions.size();
+		std::size_t removed_vertex_count = 0;
+		if (!CompactPatchToReferencedVertices(patch, removed_vertex_count)) {
+			std::cout << "[Warn] skip ancestor patch with invalid face indices: "
+				<< patch_file << std::endl;
+			continue;
+		}
 
 		std::cout << "[Info] merge ancestor patch " << patch_index
 			<< ": " << patch_file
-			<< ", V=" << patch.positions.size()
+			<< ", V=" << original_vertex_count
+			<< ", referenced_V=" << patch.positions.size()
+			<< ", removed_unreferenced_V=" << removed_vertex_count
 			<< ", F=" << patch.triangles.size() << std::endl;
 
 		std::vector<int> local_to_global(patch.positions.size(), -1);
@@ -4244,6 +4395,19 @@ Slicer_2 HybridManufacturing::MergeBlockPatchesWithDedup(
 			std::cout << "[Warn] cannot load patch file: " << patch_file << std::endl;
 			continue;
 		}
+		const std::size_t original_vertex_count = patch.positions.size();
+		std::size_t removed_vertex_count = 0;
+		if (!CompactPatchToReferencedVertices(patch, removed_vertex_count)) {
+			std::cout << "[Warn] skip patch with invalid face indices: "
+				<< patch_file << std::endl;
+			continue;
+		}
+		std::cout << "[Info] compact patch " << patch_index
+			<< ": " << patch_file
+			<< ", V=" << original_vertex_count
+			<< ", referenced_V=" << patch.positions.size()
+			<< ", removed_unreferenced_V=" << removed_vertex_count
+			<< ", F=" << patch.triangles.size() << std::endl;
 
 		std::vector<int> local_to_global(patch.positions.size(), -1);
 
@@ -5085,8 +5249,15 @@ void HybridManufacturing::CutMesh(
 	}
 
 	bool all_cut_loops_valid = true;
-	const std::vector<std::vector<std::vector<int>>> cutting_boundary_loops =
+	const std::vector<std::vector<std::vector<int>>> extracted_cut_boundary_loops =
 		ExtractAllClosedCutBoundaryLoops(cutting_plane_edges, all_cut_loops_valid);
+	RemainingCutBoundaryLoopStats remaining_loop_stats;
+	const std::vector<std::vector<std::vector<int>>> cutting_boundary_loops =
+		FilterCutLoopsToRemainingMeshBoundary(
+			all_slicer,
+			extracted_cut_boundary_loops,
+			remaining_loop_stats,
+			all_cut_loops_valid);
 	if (!all_cut_loops_valid) {
 		jud_error = true;
 	}
@@ -5095,8 +5266,12 @@ void HybridManufacturing::CutMesh(
 	for (const auto& layer_loops : cutting_boundary_loops) {
 		cut_loop_count += layer_loops.size();
 	}
-	std::cout << "[HybridManufacturing::CutMesh] Extracted cut boundary loops: "
-		<< cut_loop_count << std::endl;
+	std::cout << "[HybridManufacturing::CutMesh] Remaining cut boundary loop filter: "
+		<< "extracted=" << remaining_loop_stats.input_loop_count
+		<< ", retained=" << cut_loop_count
+		<< ", discarded_removed_side=" << remaining_loop_stats.discarded_orphan_loop_count
+		<< ", partial=" << remaining_loop_stats.partial_boundary_loop_count
+		<< std::endl;
 
 	vector<int> all_cap_face_ids;
 	vector<int> id_contact_faces;
@@ -5243,9 +5418,13 @@ void HybridManufacturing::CutMesh(
 				F4(i, j) = F3[i][j];
 		igl::writeSTL(file_name + "-" + to_string(height_of_beam_search) + "_" + to_string(cont_number_of_queue) + "_B.stl", V4, F4, igl::FileEncoding::Binary);
 
-		Geometry tessel;
-		tessel.visit(ImportSTL(file_name + "-" + to_string(height_of_beam_search) + "_" + to_string(cont_number_of_queue) + "_B.stl"));
-		tessel.visit(ExportOBJ(file_name + "-" + to_string(height_of_beam_search) + "_" + to_string(cont_number_of_queue) + ".obj"));
+		const std::string output_obj =
+			file_name + "-" + to_string(height_of_beam_search) + "_" + to_string(cont_number_of_queue) + ".obj";
+		if (!igl::writeOBJ(output_obj, temp_V, temp_F)) {
+			std::cerr << "[HybridManufacturing::CutMesh] Failed to write full-precision OBJ: "
+				<< output_obj << std::endl;
+			jud_error = true;
+		}
 	}
 	else {
 		Katana::Instance().stl.saveStlFromObj(file_name + "-" + to_string(height_of_beam_search) + "_" + to_string(cont_number_of_queue) + "_" + to_string(id_continue) + "_subblock.stl", temp_V, temp_F);
@@ -5265,9 +5444,14 @@ void HybridManufacturing::CutMesh(
 				F4(i, j) = F3[i][j];
 		igl::writeSTL(file_name + "-" + to_string(height_of_beam_search) + "_" + to_string(cont_number_of_queue) + "_" + to_string(id_continue) + "_subblock_B.stl", V4, F4, igl::FileEncoding::Binary);
 
-		Geometry tessel;
-		tessel.visit(ImportSTL(file_name + "-" + to_string(height_of_beam_search) + "_" + to_string(cont_number_of_queue) + "_" + to_string(id_continue) + "_subblock_B.stl"));
-		tessel.visit(ExportOBJ(file_name + "-" + to_string(height_of_beam_search) + "_" + to_string(cont_number_of_queue) + "_" + to_string(id_continue) + "_subblock.obj"));
+		const std::string output_obj =
+			file_name + "-" + to_string(height_of_beam_search) + "_" + to_string(cont_number_of_queue)
+			+ "_" + to_string(id_continue) + "_subblock.obj";
+		if (!igl::writeOBJ(output_obj, temp_V, temp_F)) {
+			std::cerr << "[HybridManufacturing::CutMesh] Failed to write full-precision OBJ: "
+				<< output_obj << std::endl;
+			jud_error = true;
+		}
 	}
 
 	string str_contact_faces;
@@ -5695,6 +5879,12 @@ void HybridManufacturing::subtractive_accessibility_decomposition_global(int hei
 			merged_vertex_source_patch_id,
 			merged_face_source_patch_id,
 			1e-3);
+	if (!StitchMergedPatchBoundariesForGraphCut(
+		slicer_load_merged_patch,
+		merged_face_source_patch_id,
+		"global")) {
+		return;
+	}
 	slicer_load_merged_patch.save(VisPath("block_patch_merged_removedup.obj"));
 	std::cout << "[Info] merged patch mesh: V=" << slicer_load_merged_patch.positions.size()
 		<< ", F=" << slicer_load_merged_patch.triangles.size() << std::endl;
@@ -6179,6 +6369,12 @@ int HybridManufacturing::subtractive_accessibility_decomposition_local(int heigh
 		merged_vertex_source_patch_id,
 		merged_face_source_patch_id,
 		1e-5);
+	if (!StitchMergedPatchBoundariesForGraphCut(
+		slicer_load_merged_patch,
+		merged_face_source_patch_id,
+		"local")) {
+		return 999;
+	}
 	slicer_load_merged_patch.save(VisPath("block_patch_merged_removedup_local.obj"));
 	std::cout << "[Info] merged patch mesh: V=" << slicer_load_merged_patch.positions.size()
 		<< ", F=" << slicer_load_merged_patch.triangles.size() << std::endl;

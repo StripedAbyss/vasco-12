@@ -6,6 +6,7 @@
 #include <regex>
 #include <sstream>
 #include <fstream>
+#include <iomanip>
 #include <cmath>
 
 namespace vasco {
@@ -56,6 +57,7 @@ public:
     bool save(const std::string& filename) const {
         std::ofstream file(filename);
         if (!file) return false;
+        file << std::setprecision(17);
         for (auto& p : positions) {
             file << "v " << p[0] << " " << p[1] << " " << p[2] << "\n";
         }

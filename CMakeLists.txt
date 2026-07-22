@@ -89,6 +89,7 @@ set(SRC_FILES
   vasco/core/MeshValidation.cpp
   vasco/core/ContactTriangulation.cpp
   vasco/core/ContourContainment.cpp
+  vasco/core/PatchBoundaryStitching.cpp
   vasco/core/SlicerMeshAdapter.cpp
   vasco/Visualization.cpp
   gco-v3.0/GCoptimization.cpp
@@ -123,6 +124,7 @@ set(HDR_FILES
   vasco/core/MeshValidation.h
   vasco/core/ContactTriangulation.h
   vasco/core/ContourContainment.h
+  vasco/core/PatchBoundaryStitching.h
   vasco/core/SlicerMeshAdapter.h
   vasco/core/CgalUtils.h
   vasco/core/GraphUtils.h

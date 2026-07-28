@@ -27,6 +27,16 @@
 
 namespace fs = std::filesystem;
 
+enum class SubtractiveDecompositionMode
+{
+	BeamSearch = 0,
+	Global = 1,
+	Local = 2,
+	LocalInitializedGlobal = 3,
+	RandomMultiStartGlobal = 4,
+	RandomMultiStartLocal = 5
+};
+
 #ifndef VASCO_ROOT_DIR
 #define VASCO_ROOT_DIR "."
 #endif
@@ -44,8 +54,12 @@ bool process_model(
 	const std::string& suff,
 	const nozzle& the_nozzle,
 	const cutter& cutting_tool,
-	bool run_subtractive_global,
-	int subtractive_global_height);
+	SubtractiveDecompositionMode subtractive_decomposition_mode,
+	int subtractive_decomposition_height,
+	int subtractive_random_restart_count,
+	unsigned int subtractive_random_seed,
+	int subtractive_random_thread_count,
+	double subtractive_block_boundary_overlap_cost_per_unit);
 
 
 //clock_t start_time, end_time;
@@ -59,8 +73,39 @@ int main()
 	const IniData ini = LoadIni(iniPath);
 	const std::string my_file_path = GetIniString(ini, "Input", "BaseDir", "data\\transformed_mesh_10K");
 	const std::vector<std::string> my_file_name = GetIniStringList(ini, "Input", "FileNames");
-	const bool run_subtractive_global = (GetIniInt(ini, "Run", "RunSubtractiveGlobal", 0) != 0);
-	const int subtractive_global_height = GetIniInt(ini, "Run", "SubtractiveGlobalHeight", 3);
+	int subtractive_decomposition_mode_value =
+		GetIniInt(ini, "Run", "SubtractiveDecompositionMode", 0);
+	if (subtractive_decomposition_mode_value < static_cast<int>(SubtractiveDecompositionMode::BeamSearch)
+		|| subtractive_decomposition_mode_value > static_cast<int>(SubtractiveDecompositionMode::RandomMultiStartLocal)) {
+		std::cerr << "[main] Invalid SubtractiveDecompositionMode="
+			<< subtractive_decomposition_mode_value
+			<< "; expected 0 (beam search), 1 (global), 2 (local),"
+			<< " 3 (local-initialized global), 4 (random-multistart global),"
+			<< " or 5 (random-multistart local). Use 0."
+			<< std::endl;
+		subtractive_decomposition_mode_value =
+			static_cast<int>(SubtractiveDecompositionMode::BeamSearch);
+	}
+	const auto subtractive_decomposition_mode =
+		static_cast<SubtractiveDecompositionMode>(subtractive_decomposition_mode_value);
+	const int subtractive_decomposition_height =
+		GetIniInt(ini, "Run", "SubtractiveDecompositionHeight", 3);
+	const int subtractive_random_restart_count =
+		std::max(1, GetIniInt(ini, "Run", "SubtractiveRandomRestartCount", 10));
+	const int subtractive_random_seed_value =
+		std::max(0, GetIniInt(ini, "Run", "SubtractiveRandomSeed", 12345));
+	const unsigned int subtractive_random_seed =
+		static_cast<unsigned int>(subtractive_random_seed_value);
+	const int subtractive_random_thread_count =
+		std::max(0, GetIniInt(ini, "Run", "SubtractiveRandomThreadCount", 0));
+	const double subtractive_block_boundary_overlap_cost_per_unit =
+		std::max(
+			0.0,
+			GetIniDouble(
+				ini,
+				"Run",
+				"SubtractiveBlockBoundaryOverlapCostPerUnit",
+				10.0));
 
 	if (my_file_name.empty()) {
 		std::cerr << "[main] No input file names found in " << iniPath << std::endl;
@@ -72,7 +117,17 @@ int main()
 	const cutter cutting_tool = create_cutter(tolerance);
 
 	for (const auto& suff : my_file_name) {
-		process_model(my_file_path, suff, the_nozzle, cutting_tool, run_subtractive_global, subtractive_global_height);
+		process_model(
+			my_file_path,
+			suff,
+			the_nozzle,
+			cutting_tool,
+			subtractive_decomposition_mode,
+			subtractive_decomposition_height,
+			subtractive_random_restart_count,
+			subtractive_random_seed,
+			subtractive_random_thread_count,
+			subtractive_block_boundary_overlap_cost_per_unit);
 	}
 
 	return 0;
@@ -205,8 +260,12 @@ bool process_model(
 	const std::string& suff,
 	const nozzle& the_nozzle,
 	const cutter& cutting_tool,
-	bool run_subtractive_global,
-	int subtractive_global_height)
+	SubtractiveDecompositionMode subtractive_decomposition_mode,
+	int subtractive_decomposition_height,
+	int subtractive_random_restart_count,
+	unsigned int subtractive_random_seed,
+	int subtractive_random_thread_count,
+	double subtractive_block_boundary_overlap_cost_per_unit)
 {
 	std::string file_name = my_file_path + "\\" + suff + "\\" + suff;
 	std::string path_obj = file_name + ".obj";
@@ -229,21 +288,80 @@ bool process_model(
 	Katana::Instance().stl.saveStlFromObj(file_name + "-0_0" + ".stl", V, F);
 	igl::writeOBJ(file_name + "-0_0" + ".obj", V, F); //�¼ӵ���䣬�����Ժ�beamsearchȱ��obj������
 	HybridManufacturing hybrid_manufacturing(my_file_path, suff, V, F, N);
+	hybrid_manufacturing.graph_cut_block_boundary_overlap_cost_per_unit =
+		subtractive_block_boundary_overlap_cost_per_unit;
 	hybrid_manufacturing.open_vis_voronoi = 0;
 	hybrid_manufacturing.open_vis_red_points = 1;
 	hybrid_manufacturing.open_vis_green_points = 0;
 	hybrid_manufacturing.open_vis_stair_case = 1;
 	hybrid_manufacturing.open_vis_additive_accessibility_debug = 0;
+	hybrid_manufacturing.open_vis_additive_self_support_debug = 1;
 	hybrid_manufacturing.open_change_orientation = 0;
 
-	if (run_subtractive_global) {
+	if (subtractive_decomposition_mode == SubtractiveDecompositionMode::Global) {
 		cutter cutting_tool_sub = cutting_tool;
-		std::cout << "[main] RunSubtractiveGlobal=1, height="
-			<< subtractive_global_height << std::endl;
+		std::cout << "[main] SubtractiveDecompositionMode=1 (global), height="
+			<< subtractive_decomposition_height << std::endl;
 		hybrid_manufacturing.subtractive_accessibility_decomposition_global(
-			subtractive_global_height,
+			subtractive_decomposition_height,
 			cutting_tool_sub);
 		return true;
+	}
+	if (subtractive_decomposition_mode == SubtractiveDecompositionMode::Local) {
+		cutter cutting_tool_sub = cutting_tool;
+		std::cout << "[main] SubtractiveDecompositionMode=2 (local), height="
+			<< subtractive_decomposition_height << std::endl;
+		const int local_label_count =
+			hybrid_manufacturing.subtractive_accessibility_decomposition_local(
+				subtractive_decomposition_height,
+				cutting_tool_sub);
+		std::cout << "[main] Local subtractive decomposition label count="
+			<< local_label_count << std::endl;
+		return local_label_count != 999;
+	}
+	if (subtractive_decomposition_mode == SubtractiveDecompositionMode::LocalInitializedGlobal) {
+		cutter cutting_tool_sub = cutting_tool;
+		std::cout << "[main] SubtractiveDecompositionMode=3 (local-initialized global), height="
+			<< subtractive_decomposition_height << std::endl;
+		hybrid_manufacturing.subtractive_accessibility_decomposition_local_initialized_global(
+			subtractive_decomposition_height,
+			cutting_tool_sub);
+		return true;
+	}
+	if (subtractive_decomposition_mode == SubtractiveDecompositionMode::RandomMultiStartGlobal) {
+		cutter cutting_tool_sub = cutting_tool;
+		std::cout << "[main] SubtractiveDecompositionMode=4 (random-multistart global), height="
+			<< subtractive_decomposition_height
+			<< ", restarts=" << subtractive_random_restart_count
+			<< ", seed=" << subtractive_random_seed
+			<< ", threads=" << subtractive_random_thread_count
+			<< std::endl;
+		hybrid_manufacturing.subtractive_accessibility_decomposition_random_multistart_global(
+			subtractive_decomposition_height,
+			cutting_tool_sub,
+			subtractive_random_restart_count,
+			subtractive_random_seed,
+			subtractive_random_thread_count);
+		return true;
+	}
+	if (subtractive_decomposition_mode == SubtractiveDecompositionMode::RandomMultiStartLocal) {
+		cutter cutting_tool_sub = cutting_tool;
+		std::cout << "[main] SubtractiveDecompositionMode=5 (random-multistart local), height="
+			<< subtractive_decomposition_height
+			<< ", restarts=" << subtractive_random_restart_count
+			<< ", seed=" << subtractive_random_seed
+			<< ", threads=" << subtractive_random_thread_count
+			<< std::endl;
+		const int local_label_count =
+			hybrid_manufacturing.subtractive_accessibility_decomposition_random_multistart_local(
+				subtractive_decomposition_height,
+				cutting_tool_sub,
+				subtractive_random_restart_count,
+				subtractive_random_seed,
+				subtractive_random_thread_count);
+		std::cout << "[main] Random-multistart local subtractive decomposition label count="
+			<< local_label_count << std::endl;
+		return local_label_count != 999;
 	}
 
 	hybrid_manufacturing.InitializeVoronoi();

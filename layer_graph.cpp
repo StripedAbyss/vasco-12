@@ -214,7 +214,7 @@ void Layer_Graph::GetTrianglesForSurfaceMeshSlices(
 	GetTrianglesForLayersFromMesh(contour_face_ids, face_normals, vectorAfter, height_of_beam_search, id_continue);
 }
 
-void Layer_Graph::GenerateDependencyEdgesFromSurfaceMeshSlices( //ÏÖÔÚÊÇÖ»¸ù¾ÝµãÊÇ·ñÔÚÉÏÒ»¸ö²ãµÄÂÖÀªÄÚÀ´Éú³ÉÒÀÀµ±ß£¬¿ÉÒÔ¸Ä³É¸ù¾Ý±ßÊÇ·ñ´©¹ýÉÏÒ»¸ö²ãµÄÂÖÀªÀ´Éú³ÉÒÀÀµ±ß
+void Layer_Graph::GenerateDependencyEdgesFromSurfaceMeshSlices( //ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ö»ï¿½ï¿½ï¿½Ýµï¿½ï¿½Ç·ï¿½ï¿½ï¿½ï¿½ï¿½Ò»ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ß£ï¿½ï¿½ï¿½ï¿½Ô¸Ä³É¸ï¿½ï¿½Ý±ï¿½ï¿½Ç·ñ´©¹ï¿½ï¿½ï¿½Ò»ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
 	const std::vector<SurfaceMeshSliceData>& slices)
 {
 	for (std::size_t i = 1; i < data.slice_points.size(); ++i) {
@@ -419,6 +419,7 @@ void Layer_Graph::GetTrianglesForLayersFromMesh(
 				}
 				const Eigen::Vector3d& face_normal = face_normals[face_id];
 				bool jud_self_support = (face_normal.dot(base_normal) + sin(PI / 3.6) >= 0);
+				//bool jud_self_support = (face_normal.dot(base_normal) + sin(PI / 4) >= 0);
 				if (!jud_self_support) {
 					cont_not_set_support++;
 				}
@@ -479,7 +480,7 @@ void Layer_Graph::GetTrianglesForLayers(vector<vector<vector<Vertex>>> all_slice
 				//else
 					jud_self_support = (face_normal.dot(base_normal) + sin(PI / 3.6) >= 0);   //PI / 3.6
 				if (jud_self_support == false) {
-					//cont_not_set_support++;   //×¢ÊÍÊ±¹Ø±Õ
+					//cont_not_set_support++;   //×¢ï¿½ï¿½Ê±ï¿½Ø±ï¿½
 				}
 				//cout << "%%" << height_of_beam_search << " " << id_continue << endl;
 				//if (height_of_beam_search <= 2) {
@@ -890,7 +891,7 @@ void Layer_Graph::DFS_One(int u, std::vector<int>& medium_path, int num_blocks)
 
 		//bool jud_continue = false;
 		//int sum_layers = 0;
-		//for (int p = num_patches-1; p >= 0; p--) {    //Õâ²¿·Ö×îºÃ»¹ÊÇ¸Ä³ÉÃ¿¸öpatchesÖ®¼äµÄÒÀÀµ£¬²»È»¿ÉÄÜÓÐ´í
+		//for (int p = num_patches-1; p >= 0; p--) {    //ï¿½â²¿ï¿½ï¿½ï¿½ï¿½Ã»ï¿½ï¿½Ç¸Ä³ï¿½Ã¿ï¿½ï¿½patchesÖ®ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½È»ï¿½ï¿½ï¿½ï¿½ï¿½Ð´ï¿½
 		//	sum_layers += cont_nodes_of_patches[p];
 		//	if (i == sum_layers && medium_path.size() != 0) {
 		//		jud_continue = true;
@@ -1025,7 +1026,7 @@ void Layer_Graph::DFS_One(int u, std::vector<int>& medium_path, int num_blocks)
 
 void Layer_Graph::DFS_ALL(int fa, int u, std::vector<int>& medium_path, int cont_num)
 {
-	//if (tree_node.size() >= 1000* cont_num)    //Ä¿Ç°ºÜ¶àÈßÓàµã
+	//if (tree_node.size() >= 1000* cont_num)    //Ä¿Ç°ï¿½Ü¶ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
 	//	return;
 
 
@@ -1175,7 +1176,7 @@ void Layer_Graph::DFS_ALL(int fa, int u, std::vector<int>& medium_path, int cont
 		this->UpdateDegree(v, 1);
 	}
 	if (go_on == false) {
-		//É¾³ýÈßÓà
+		//É¾ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
 		vector<int> temp_medium_path = medium_path;
 		sort(temp_medium_path.begin(), temp_medium_path.end());
 		bool jud_redundancy = false;
@@ -1476,7 +1477,7 @@ void Layer_Graph::BFS(std::vector<int>& medium_path, int num_blocks)
 	}
 
 
-	//int now_node = node;    //ÏÈÑ¡Ò»ÌõÂ·¾¶
+	//int now_node = node;    //ï¿½ï¿½Ñ¡Ò»ï¿½ï¿½Â·ï¿½ï¿½
 	//std::vector<int> temp_1;
 	//while (new_pre_tree_index[now_node] != -1) {
 	//	temp_1.push_back(new_tree_node[now_node]);
@@ -1491,7 +1492,7 @@ void Layer_Graph::BFS(std::vector<int>& medium_path, int num_blocks)
 	//}
 
 
-	vector<vector<int>> final_pathes;   //ËùÓÐÂ·¾¶ÖÐÌôÑ¡Ò»Ìõ
+	vector<vector<int>> final_pathes;   //ï¿½ï¿½ï¿½ï¿½Â·ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ñ¡Ò»ï¿½ï¿½
 	vector<int> cont_area_S_for_pathes;
 	for (int i = 0; i < terminate_nodes.size(); i++) {
 		vector<int> current_path;
@@ -1754,7 +1755,7 @@ void Layer_Graph::CollisionDetectionForSubtractiveManufacturing(nozzle the_nozzl
 
 		for (int i = 0; i < temp_layers.size(); i++) {     
 			for (int j = 0; j < temp_layers[i].size(); j++) {
-				for (int k = 0; k < temp_layers[i][j].size(); k += step) {   //ÏÂ²ÉÑù
+				for (int k = 0; k < temp_layers[i][j].size(); k += step) {   //ï¿½Â²ï¿½ï¿½ï¿½
 					if (flag_accessible_points[i][j][k] == true) {
 						cont_accessible_points++;
 						continue;
@@ -1830,7 +1831,7 @@ void Layer_Graph::CollisionDetectionForSubtractiveManufacturing(nozzle the_nozzl
 		double circle_r;
 		for (int i = 0; i < temp_layers.size(); i++) {
 			for (int j = 0; j < temp_layers[i].size(); j++) {
-				for (int k = 0; k < temp_layers[i][j].size(); k += step) {   //ÏÂ²ÉÑù
+				for (int k = 0; k < temp_layers[i][j].size(); k += step) {   //ï¿½Â²ï¿½ï¿½ï¿½
 					if (flag_accessible_points[i][j][k] == true) {
 						continue;
 					}
@@ -1841,7 +1842,7 @@ void Layer_Graph::CollisionDetectionForSubtractiveManufacturing(nozzle the_nozzl
 					for (int ii = 0; ii < temp_layers.size(); ii++) {
 						for (int jj = 0; jj < temp_layers[ii].size(); jj++) {
 							if (i != ii || j != jj) {
-								bool jud_collision_2 = false;   //Õâ´ÎÎ»ÖÃÓ¦¸Ã¶ÔÁË
+								bool jud_collision_2 = false;   //ï¿½ï¿½ï¿½Î»ï¿½ï¿½Ó¦ï¿½Ã¶ï¿½ï¿½ï¿½
 								for (int kk = 0; kk < temp_layers[ii][jj].size(); kk += step) {
 									//if (i != ii || j != jj || k != kk) {
 									double diff = temp_layers[ii][jj][kk](2, 0) - temp_layers[i][j][k](2, 0);
@@ -1959,8 +1960,8 @@ void Layer_Graph::MergeLayersWithDefaultOrder()
 	
 
 	///////**************default searching order**************/////////
-	///ÔÝÊ±ºöÂÔÔö²ÄÅö×²ÒÀÀµ±ß
-	///Óöµ½²»¿ÉºÏ²¢layerÊ±¼´·Ö¿é
+	///ï¿½ï¿½Ê±ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½×²ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
+	///ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ÉºÏ²ï¿½layerÊ±ï¿½ï¿½ï¿½Ö¿ï¿½
 	
 	has_subtractive_collision_dependency = new bool* [sum_layers];
 	for (int i = 0; i < sum_layers; i++)
@@ -1973,7 +1974,7 @@ void Layer_Graph::MergeLayersWithDefaultOrder()
 	all_blocks.push_back(temp_vec_all_blocks);
 	int num_blocks = 0;
 	for(int i =0;i<current_layers.size();i++)
-		for (int j = 0; j < current_layers[i].size(); j++) {    //Ä¬ÈÏË³ÐòÏÂ×ÜÊÇ·ûºÏÖ§³ÅÒÀÀµ¹ØÏµ
+		for (int j = 0; j < current_layers[i].size(); j++) {    //Ä¬ï¿½ï¿½Ë³ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ç·ï¿½ï¿½ï¿½Ö§ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ïµ
 			int id_layer = data.index_inv[std::make_pair(i, j)];
 			bool jud_merge_layer = true;
 			for (int k = 0; k < current_area_S.size(); k++) {
@@ -2228,7 +2229,7 @@ void Layer_Graph::MergeLayersWithBeamSearch(int* cont_layers_of_patches)
 				this->DFS_ALL(now_node, i, temp_vec_all_blocks, cont_num);
 				cont_num++;
 
-						//for (int j = 1; j < temp_vec_all_blocks.size(); j++) {   //±ÜÃâÉ¾³ýÈßÓàËù¼Ó£¿
+						//for (int j = 1; j < temp_vec_all_blocks.size(); j++) {   //ï¿½ï¿½ï¿½ï¿½É¾ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ó£ï¿½
 						//	this->node_visited[temp_vec_all_blocks[j]] = false;
 						//	this->UpdateDegree(temp_vec_all_blocks[j], 1);
 						//}

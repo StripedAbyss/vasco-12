@@ -103,6 +103,13 @@ public:
 	int cont_normal_dependency_edges;
 	vector<vector<Triangle*>> all_triangles_of_layers;
 	vector<bool> is_the_layer_self_suppot;
+	// Face-normal counts recomputed from the active SurfaceMesh for self-support diagnostics.
+	vector<int> self_support_associated_face_count;
+	vector<int> self_support_stored_normal_count;
+	vector<int> self_support_valid_normal_count;
+	vector<int> self_support_invalid_face_count;
+	vector<int> self_support_too_downward_face_count;
+	vector<vector<int>> self_support_too_downward_face_ids;
 
 private:
 	std::vector<std::vector<std::vector<Eigen::MatrixXd>>> current_layers;

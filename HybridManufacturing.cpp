@@ -1,4 +1,5 @@
 ﻿#include "HybridManufacturing.h"
+#include "AccessibilityVisualization.h"
 #include<stdlib.h>
 #include "vasco/core/ContactTriangulation.h"
 #include "vasco/core/ContourContainment.h"
@@ -11,14 +12,26 @@
 #include <CGAL/IO/polygon_mesh_io.h>
 #include <direct.h>
 #include <cstdint>
+#include <future>
 #include <iomanip>
 #include <limits>
+#include <random>
 #include <set>
+#include <thread>
+#include <tuple>
 #include <unordered_map>
 #include <unordered_set>
 
 namespace
 {
+	// Removes structures registered by the previous input model while keeping the Polyscope window initialized.
+	void ResetPolyscopeSceneForGlobalDecomposition()
+	{
+		polyscope::removeAllStructures();
+		std::cout << "[HybridManufacturing::subtractive_accessibility_decomposition_global] "
+			<< "Cleared previous Polyscope structures." << std::endl;
+	}
+
 	inline void PrepareToolForCollision(cutter& tool)
 	{
 		tool.cylinder_height_threshold = tool.cylinder_height + tool.ball_r;
@@ -27,6 +40,120 @@ namespace
 		tool.cylinder_r_sq = tool.cylinder_r * tool.cylinder_r;
 		tool.carriage_r_sq = tool.carriage_r * tool.carriage_r;
 		tool.total_height = tool.cylinder_height + tool.ball_r + tool.carriage_height;
+	}
+
+	// Computes a normalized triangle-face normal for the self-support diagnostics.
+	bool ComputeSelfSupportFaceNormal(
+		const SurfaceMesh& mesh,
+		SurfaceMesh::Face_index face_index,
+		Eigen::Vector3d& normal)
+	{
+		if (face_index == SurfaceMesh::null_face()
+			|| static_cast<std::size_t>(face_index.idx()) >= mesh.number_of_faces()) {
+			return false;
+		}
+
+		const auto h0 = mesh.halfedge(face_index);
+		const auto h1 = mesh.next(h0);
+		const auto h2 = mesh.next(h1);
+		const Point_3& p0 = mesh.point(mesh.target(h0));
+		const Point_3& p1 = mesh.point(mesh.target(h1));
+		const Point_3& p2 = mesh.point(mesh.target(h2));
+		const Eigen::Vector3d e1(
+			CGAL::to_double(p1.x() - p0.x()),
+			CGAL::to_double(p1.y() - p0.y()),
+			CGAL::to_double(p1.z() - p0.z()));
+		const Eigen::Vector3d e2(
+			CGAL::to_double(p2.x() - p0.x()),
+			CGAL::to_double(p2.y() - p0.y()),
+			CGAL::to_double(p2.z() - p0.z()));
+		normal = e1.cross(e2);
+		if (!normal.allFinite() || normal.squaredNorm() <= 1e-24) {
+			return false;
+		}
+		normal.normalize();
+		return true;
+	}
+
+	// Counts per-layer downward normals from the same stored array used by the search decision.
+	void PopulateLayerSelfSupportDiagnostics(
+		const std::vector<SurfaceMeshSliceData>& slices,
+		Layer_Graph& layer_graph)
+	{
+		const int node_count = layer_graph.total_node_num;
+		layer_graph.self_support_associated_face_count.assign(node_count, 0);
+		layer_graph.self_support_stored_normal_count.assign(node_count, 0);
+		layer_graph.self_support_valid_normal_count.assign(node_count, 0);
+		layer_graph.self_support_invalid_face_count.assign(node_count, 0);
+		layer_graph.self_support_too_downward_face_count.assign(node_count, 0);
+		layer_graph.self_support_too_downward_face_ids.assign(node_count, {});
+
+		const Eigen::Vector3d base_normal(0.0, 0.0, 1.0);
+		const double normal_z_threshold = -std::sin(PI / 3.6);
+		int stored_normal_count = 0;
+		const std::vector<Eigen::Vector3d>* stored_normals = nullptr;
+		for (const auto& slice : slices) {
+			stored_normal_count += static_cast<int>(slice.face_normals.size());
+			if (stored_normals == nullptr && !slice.face_normals.empty()) {
+				stored_normals = &slice.face_normals;
+			}
+		}
+		for (int node_id = 0; node_id < node_count; ++node_id) {
+			const auto index_it = layer_graph.data.index.find(node_id);
+			if (index_it == layer_graph.data.index.end()) {
+				continue;
+			}
+
+			const int slice_id = index_it->second.first;
+			const int component_id = index_it->second.second;
+			if (slice_id < 0
+				|| slice_id >= static_cast<int>(slices.size())
+				|| slice_id >= static_cast<int>(layer_graph.data.source_contour_ids.size())
+				|| slice_id >= static_cast<int>(layer_graph.data.source_hole_contour_ids.size())
+				|| component_id < 0
+				|| component_id >= static_cast<int>(layer_graph.data.source_contour_ids[slice_id].size())
+				|| component_id >= static_cast<int>(layer_graph.data.source_hole_contour_ids[slice_id].size())) {
+				continue;
+			}
+
+			const auto& slice = slices[slice_id];
+			layer_graph.self_support_stored_normal_count[node_id] =
+				stored_normal_count;
+			auto process_source_contour = [&](int source_contour_id) {
+				if (source_contour_id < 0
+					|| source_contour_id >= static_cast<int>(slice.contour_face_ids.size())) {
+					return;
+				}
+				for (SurfaceMesh::Face_index face_index : slice.contour_face_ids[source_contour_id]) {
+					++layer_graph.self_support_associated_face_count[node_id];
+					const int normal_index = static_cast<int>(face_index.idx());
+					if (stored_normals == nullptr
+						|| normal_index < 0
+						|| normal_index >= static_cast<int>(stored_normals->size())) {
+						++layer_graph.self_support_invalid_face_count[node_id];
+						continue;
+					}
+					const Eigen::Vector3d& face_normal = (*stored_normals)[normal_index];
+					if (!face_normal.allFinite() || face_normal.squaredNorm() <= 1e-24) {
+						++layer_graph.self_support_invalid_face_count[node_id];
+						continue;
+					}
+					++layer_graph.self_support_valid_normal_count[node_id];
+					if (face_normal.dot(base_normal) < normal_z_threshold) {
+						++layer_graph.self_support_too_downward_face_count[node_id];
+						layer_graph.self_support_too_downward_face_ids[node_id].push_back(
+							normal_index);
+					}
+				}
+			};
+
+			process_source_contour(
+				layer_graph.data.source_contour_ids[slice_id][component_id]);
+			for (int hole_source_id :
+				layer_graph.data.source_hole_contour_ids[slice_id][component_id]) {
+				process_source_contour(hole_source_id);
+			}
+		}
 	}
 
 	inline Eigen::Vector3d ToVector3(const Eigen::MatrixXd& vec)
@@ -104,7 +231,7 @@ namespace
 	std::string TryDerivePatchFileFromSourceInput(
 		const std::string& source_input_file,
 		const std::string& model_file_name,
-		const std::string& vis_dir)
+		const std::string& patch_dir)
 	{
 		const std::string source_stem = FileStemFromPath(source_input_file);
 		const std::string model_stem = FileStemFromPath(model_file_name);
@@ -133,13 +260,13 @@ namespace
 			return "";
 		}
 
-		return JoinPath(vis_dir, "block_patch-" + parts[0] + "_" + parts[1] + ".obj");
+		return JoinPath(patch_dir, "block_patch-" + parts[0] + "_" + parts[1] + ".obj");
 	}
 
 	std::vector<std::string> LoadFirstFinalNodeAncestorPatchFiles(
 		const std::string& ancestor_source_report_file,
 		const std::string& model_file_name,
-		const std::string& vis_dir)
+		const std::string& patch_dir)
 	{
 		std::ifstream report(ancestor_source_report_file);
 		if (!report.is_open()) {
@@ -177,7 +304,8 @@ namespace
 
 		if (patch_files_depth_from_final.empty()) {
 			for (const auto& source_file : source_files_depth_from_final) {
-				const std::string patch_file = TryDerivePatchFileFromSourceInput(source_file, model_file_name, vis_dir);
+				const std::string patch_file =
+					TryDerivePatchFileFromSourceInput(source_file, model_file_name, patch_dir);
 				if (!patch_file.empty()) {
 					patch_files_depth_from_final.push_back(patch_file);
 				}
@@ -270,6 +398,699 @@ namespace
 			return false;
 		}
 		return true;
+	}
+
+	struct MergedPatchGraphCutEdgeAnnotation {
+		int first_vertex = -1;
+		int second_vertex = -1;
+		int first_face = -1;
+		int second_face = -1;
+		int incident_face_count = 0;
+		int first_source_block = -1;
+		int second_source_block = -1;
+		double length = 0.0;
+		bool is_additive_block_boundary = false;
+		int base_smooth_cost = 0;
+		int block_boundary_overlap_cost = 0;
+	};
+
+	struct MergedPatchGraphCutAdjacency {
+		std::vector<std::vector<int>> face_relations;
+		// GeneralGraph_DArraySArraySpatVarying divides these values by 10.
+		std::vector<int> edge_weights_times_ten;
+		std::vector<MergedPatchGraphCutEdgeAnnotation> edge_annotations;
+		std::size_t additive_block_boundary_edge_count = 0;
+		double additive_block_boundary_total_length = 0.0;
+		std::size_t exterior_edge_count = 0;
+		std::size_t non_manifold_edge_count = 0;
+	};
+
+	// Builds the shared-edge graph once for all merged-patch graph-cut modes.
+	// An internal edge is an additive-block boundary when its two source block ids differ.
+	bool BuildMergedPatchGraphCutAdjacency(
+		const Slicer_2& merged_patch,
+		const std::vector<int>& face_source_block_ids,
+		double block_boundary_overlap_cost_per_unit,
+		MergedPatchGraphCutAdjacency& result)
+	{
+		result = {};
+		if (merged_patch.triangles.size() != face_source_block_ids.size()
+			|| !std::isfinite(block_boundary_overlap_cost_per_unit)
+			|| block_boundary_overlap_cost_per_unit < 0.0) {
+			std::cerr << "[GraphCut] Cannot build merged-patch adjacency: invalid source-id count "
+				<< "or block-boundary overlap weight." << std::endl;
+			return false;
+		}
+
+		struct EdgeUse {
+			int first_vertex = -1;
+			int second_vertex = -1;
+			std::array<int, 2> faces = { -1, -1 };
+			int incident_face_count = 0;
+		};
+
+		auto make_edge_key = [](int first_vertex, int second_vertex) {
+			const std::uint32_t low = static_cast<std::uint32_t>(
+				std::min(first_vertex, second_vertex));
+			const std::uint32_t high = static_cast<std::uint32_t>(
+				std::max(first_vertex, second_vertex));
+			return (static_cast<std::uint64_t>(low) << 32)
+				| static_cast<std::uint64_t>(high);
+			};
+
+		std::unordered_map<std::uint64_t, EdgeUse> edge_uses;
+		edge_uses.reserve(merged_patch.triangles.size() * 2 + 1);
+		for (int face_id = 0;
+			face_id < static_cast<int>(merged_patch.triangles.size());
+			++face_id) {
+			const auto& triangle = merged_patch.triangles[face_id];
+			for (int corner = 0; corner < 3; ++corner) {
+				const int first_vertex = triangle[corner];
+				const int second_vertex = triangle[(corner + 1) % 3];
+				if (first_vertex < 0
+					|| second_vertex < 0
+					|| first_vertex >= static_cast<int>(merged_patch.positions.size())
+					|| second_vertex >= static_cast<int>(merged_patch.positions.size())
+					|| first_vertex == second_vertex) {
+					std::cerr << "[GraphCut] Cannot build merged-patch adjacency: invalid edge in face "
+						<< face_id << "." << std::endl;
+					return false;
+				}
+
+				const std::uint64_t key =
+					make_edge_key(first_vertex, second_vertex);
+				auto insertion = edge_uses.try_emplace(key);
+				EdgeUse& edge = insertion.first->second;
+				if (insertion.second) {
+					edge.first_vertex = std::min(first_vertex, second_vertex);
+					edge.second_vertex = std::max(first_vertex, second_vertex);
+				}
+				if (edge.incident_face_count < 2) {
+					edge.faces[edge.incident_face_count] = face_id;
+				}
+				++edge.incident_face_count;
+			}
+		}
+
+		std::vector<EdgeUse> sorted_edges;
+		sorted_edges.reserve(edge_uses.size());
+		for (const auto& edge_entry : edge_uses) {
+			sorted_edges.push_back(edge_entry.second);
+		}
+		std::sort(
+			sorted_edges.begin(),
+			sorted_edges.end(),
+			[](const EdgeUse& lhs, const EdgeUse& rhs) {
+				return std::tie(lhs.first_vertex, lhs.second_vertex)
+					< std::tie(rhs.first_vertex, rhs.second_vertex);
+			});
+
+		result.edge_annotations.reserve(sorted_edges.size());
+		result.face_relations.reserve(sorted_edges.size());
+		result.edge_weights_times_ten.reserve(sorted_edges.size());
+		for (const EdgeUse& edge : sorted_edges) {
+			MergedPatchGraphCutEdgeAnnotation annotation;
+			annotation.first_vertex = edge.first_vertex;
+			annotation.second_vertex = edge.second_vertex;
+			annotation.first_face = edge.faces[0];
+			annotation.second_face = edge.faces[1];
+			annotation.incident_face_count = edge.incident_face_count;
+			if (annotation.first_face >= 0) {
+				annotation.first_source_block =
+					face_source_block_ids[annotation.first_face];
+			}
+			if (annotation.second_face >= 0) {
+				annotation.second_source_block =
+					face_source_block_ids[annotation.second_face];
+			}
+
+			const auto& first_point =
+				merged_patch.positions[annotation.first_vertex];
+			const auto& second_point =
+				merged_patch.positions[annotation.second_vertex];
+			const double dx = first_point[0] - second_point[0];
+			const double dy = first_point[1] - second_point[1];
+			const double dz = first_point[2] - second_point[2];
+			annotation.length = std::sqrt(dx * dx + dy * dy + dz * dz);
+			if (!std::isfinite(annotation.length)) {
+				std::cerr << "[GraphCut] Cannot build merged-patch adjacency: non-finite edge length."
+					<< std::endl;
+				return false;
+			}
+
+			if (edge.incident_face_count == 1) {
+				++result.exterior_edge_count;
+			}
+			else if (edge.incident_face_count > 2) {
+				++result.non_manifold_edge_count;
+			}
+			else {
+				annotation.is_additive_block_boundary =
+					annotation.first_source_block != annotation.second_source_block;
+				if (annotation.is_additive_block_boundary) {
+					++result.additive_block_boundary_edge_count;
+					result.additive_block_boundary_total_length += annotation.length;
+				}
+
+				const double scaled_base_cost = annotation.length * 100.0;
+				const int base_weight_times_ten = static_cast<int>(std::min(
+					scaled_base_cost,
+					static_cast<double>(std::numeric_limits<int>::max())));
+				annotation.base_smooth_cost =
+					std::max(1, base_weight_times_ten) / 10;
+
+				if (annotation.is_additive_block_boundary) {
+					const double overlap_cost =
+						annotation.length * block_boundary_overlap_cost_per_unit;
+					annotation.block_boundary_overlap_cost =
+						static_cast<int>(std::min(
+							static_cast<double>(std::numeric_limits<int>::max()),
+							std::floor(overlap_cost + 0.5)));
+				}
+
+				const long long total_pairwise_cost =
+					static_cast<long long>(annotation.base_smooth_cost)
+					+ annotation.block_boundary_overlap_cost;
+				const int total_weight_times_ten = static_cast<int>(std::min(
+					total_pairwise_cost * 10,
+					static_cast<long long>(std::numeric_limits<int>::max())));
+				result.face_relations.push_back({
+					annotation.first_face,
+					annotation.second_face
+					});
+				result.edge_weights_times_ten.push_back(total_weight_times_ten);
+			}
+			result.edge_annotations.push_back(annotation);
+		}
+
+		std::cout << "[GraphCut] Merged-patch edge classification: edges="
+			<< result.edge_annotations.size()
+			<< ", adjacency_edges=" << result.face_relations.size()
+			<< ", additive_block_boundary_edges="
+			<< result.additive_block_boundary_edge_count
+			<< ", additive_block_boundary_length="
+			<< result.additive_block_boundary_total_length
+			<< ", exterior_edges=" << result.exterior_edge_count
+			<< ", non_manifold_edges=" << result.non_manifold_edge_count
+			<< ", overlap_cost_per_unit="
+			<< block_boundary_overlap_cost_per_unit
+			<< std::endl;
+		return result.non_manifold_edge_count == 0;
+	}
+
+	// Writes every merged-mesh edge together with its additive-block-boundary flag
+	// and the overlap cost contributed by the final graph-cut labeling.
+	void WriteMergedPatchGraphCutEdgeCostReport(
+		const std::string& output_file,
+		const std::string& summary_file,
+		const MergedPatchGraphCutAdjacency& adjacency,
+		const std::vector<int>& labels)
+	{
+		EnsureParentDirectory(output_file);
+		std::ofstream report(output_file);
+		const bool write_edge_report = report.is_open();
+		if (!report.is_open()) {
+			std::cerr << "[GraphCut] Cannot write edge cost report: "
+				<< output_file << std::endl;
+		}
+
+		if (write_edge_report) {
+			report << std::setprecision(17);
+			report
+				<< "edge_id,vertex_0,vertex_1,incident_face_count,"
+				<< "face_0,face_1,source_block_0,source_block_1,"
+				<< "is_additive_block_boundary,length,"
+				<< "label_0,label_1,is_graphcut_patch_boundary,"
+				<< "base_smooth_cost,block_boundary_overlap_cost,"
+				<< "overlap_cost_contribution\n";
+		}
+
+		double overlapping_boundary_length = 0.0;
+		long long overlap_cost = 0;
+		std::size_t overlapping_edge_count = 0;
+		for (std::size_t edge_id = 0;
+			edge_id < adjacency.edge_annotations.size();
+			++edge_id) {
+			const auto& edge = adjacency.edge_annotations[edge_id];
+			const int first_label =
+				edge.first_face >= 0
+				&& edge.first_face < static_cast<int>(labels.size())
+				? labels[edge.first_face]
+				: -1;
+			const int second_label =
+				edge.second_face >= 0
+				&& edge.second_face < static_cast<int>(labels.size())
+				? labels[edge.second_face]
+				: -1;
+			const bool is_graphcut_patch_boundary =
+				edge.incident_face_count == 2
+				&& first_label >= 0
+				&& second_label >= 0
+				&& first_label != second_label;
+			const int contribution =
+				edge.is_additive_block_boundary && is_graphcut_patch_boundary
+				? edge.block_boundary_overlap_cost
+				: 0;
+			if (edge.is_additive_block_boundary && is_graphcut_patch_boundary) {
+				++overlapping_edge_count;
+				overlapping_boundary_length += edge.length;
+				overlap_cost += contribution;
+			}
+
+			if (write_edge_report) {
+				report
+					<< edge_id << ","
+					<< edge.first_vertex << ","
+					<< edge.second_vertex << ","
+					<< edge.incident_face_count << ","
+					<< edge.first_face << ","
+					<< edge.second_face << ","
+					<< edge.first_source_block << ","
+					<< edge.second_source_block << ","
+					<< (edge.is_additive_block_boundary ? 1 : 0) << ","
+					<< edge.length << ","
+					<< first_label << ","
+					<< second_label << ","
+					<< (is_graphcut_patch_boundary ? 1 : 0) << ","
+					<< edge.base_smooth_cost << ","
+					<< edge.block_boundary_overlap_cost << ","
+					<< contribution << "\n";
+			}
+		}
+
+		std::cout << "[GraphCut] Additive-block/graph-cut boundary overlap: edges="
+			<< overlapping_edge_count
+			<< ", length=" << overlapping_boundary_length
+			<< ", cost=" << overlap_cost
+			<< ", report=" << output_file
+			<< std::endl;
+
+		EnsureParentDirectory(summary_file);
+		std::ofstream summary(summary_file);
+		if (!summary.is_open()) {
+			std::cerr << "[GraphCut] Cannot write boundary overlap summary: "
+				<< summary_file << std::endl;
+			return;
+		}
+		const double overlap_ratio =
+			adjacency.additive_block_boundary_total_length > 0.0
+			? overlapping_boundary_length
+				/ adjacency.additive_block_boundary_total_length
+			: 0.0;
+		summary << std::setprecision(17);
+		summary << "L_block="
+			<< adjacency.additive_block_boundary_total_length << "\n";
+		summary << "L_overlap=" << overlapping_boundary_length << "\n";
+		summary << "R_overlap=" << overlap_ratio << "\n";
+		std::cout << "[GraphCut] Boundary overlap summary saved: "
+			<< summary_file << std::endl;
+	}
+
+	// Makes every orientation of one source block feasible for a face while
+	// keeping all labels belonging to other blocks unchanged.
+	bool EnableAllOrientationLabelsForSourceBlock(
+		std::vector<int>& face_data_costs,
+		int source_block_id,
+		int orientation_count)
+	{
+		if (source_block_id <= 0 || orientation_count <= 0) {
+			return false;
+		}
+
+		const std::size_t first_label =
+			static_cast<std::size_t>(source_block_id - 1) * static_cast<std::size_t>(orientation_count);
+		const std::size_t end_label = first_label + static_cast<std::size_t>(orientation_count);
+		if (end_label > face_data_costs.size()) {
+			return false;
+		}
+
+		std::fill(
+			face_data_costs.begin() + first_label,
+			face_data_costs.begin() + end_label,
+			0);
+		return true;
+	}
+
+	struct InitializedGraphCutResult {
+		std::vector<int> labels;
+		long long initial_energy = std::numeric_limits<long long>::max();
+		long long energy = std::numeric_limits<long long>::max();
+		long long data_energy = 0;
+		long long smooth_energy = 0;
+		long long label_energy = 0;
+		bool succeeded = false;
+	};
+
+	// Runs the same GCO objective as GeneralGraph_DArraySArraySpatVarying,
+	// but starts alpha-expansion from a caller-provided valid labeling.
+	InitializedGraphCutResult RunGeneralGraphCutWithInitialLabels(
+		int node_count,
+		int label_count,
+		const std::vector<std::vector<int>>& data_costs,
+		const std::vector<std::vector<int>>& adjacency,
+		const std::vector<int>& edge_lengths,
+		const std::vector<int>& initial_labels,
+		const std::string& initialization_name,
+		bool log_progress = true)
+	{
+		InitializedGraphCutResult result;
+		result.labels.assign(static_cast<std::size_t>(std::max(0, node_count)), 0);
+		if (node_count <= 0
+			|| label_count <= 0
+			|| data_costs.size() != static_cast<std::size_t>(node_count)
+			|| adjacency.size() != edge_lengths.size()
+			|| initial_labels.size() != static_cast<std::size_t>(node_count)) {
+			std::cerr << "[GraphCut] Cannot apply the supplied initialization because the graph dimensions are invalid."
+				<< std::endl;
+			return result;
+		}
+
+		for (int label : initial_labels) {
+			if (label < 0 || label >= label_count) {
+				std::cerr << "[GraphCut] Cannot apply the supplied initialization because it contains label "
+					<< label << " outside [0, " << (label_count - 1) << "]." << std::endl;
+				return result;
+			}
+		}
+
+		std::vector<int> packed_data(
+			static_cast<std::size_t>(node_count) * static_cast<std::size_t>(label_count));
+		for (int node = 0; node < node_count; ++node) {
+			if (data_costs[static_cast<std::size_t>(node)].size()
+				!= static_cast<std::size_t>(label_count)) {
+				std::cerr << "[GraphCut] Cannot apply the supplied initialization because data-cost row "
+					<< node << " has an invalid size." << std::endl;
+				return result;
+			}
+			for (int label = 0; label < label_count; ++label) {
+				packed_data[
+					static_cast<std::size_t>(node) * static_cast<std::size_t>(label_count)
+					+ static_cast<std::size_t>(label)] =
+					data_costs[static_cast<std::size_t>(node)][static_cast<std::size_t>(label)];
+			}
+		}
+
+		std::vector<int> smooth_costs(
+			static_cast<std::size_t>(label_count) * static_cast<std::size_t>(label_count));
+		for (int first_label = 0; first_label < label_count; ++first_label) {
+			for (int second_label = 0; second_label < label_count; ++second_label) {
+				smooth_costs[
+					static_cast<std::size_t>(first_label)
+					+ static_cast<std::size_t>(second_label) * static_cast<std::size_t>(label_count)] =
+					(first_label == second_label) ? 0 : 1;
+			}
+		}
+		std::vector<int> label_costs(static_cast<std::size_t>(label_count), 100000);
+
+		try {
+			GCoptimizationGeneralGraph graph_cut(node_count, label_count);
+			graph_cut.setDataCost(packed_data.data());
+			graph_cut.setSmoothCost(smooth_costs.data());
+			graph_cut.setLabelCost(label_costs.data());
+
+			for (std::size_t edge_index = 0; edge_index < adjacency.size(); ++edge_index) {
+				if (adjacency[edge_index].size() != 2) {
+					std::cerr << "[GraphCut] Skip malformed adjacency entry " << edge_index << "."
+						<< std::endl;
+					continue;
+				}
+				graph_cut.setNeighbors(
+					adjacency[edge_index][0],
+					adjacency[edge_index][1],
+					edge_lengths[edge_index] / 10);
+			}
+			for (int node = 0; node < node_count; ++node) {
+				graph_cut.setLabel(node, initial_labels[static_cast<std::size_t>(node)]);
+			}
+
+			if (log_progress) {
+				std::cout << "[GraphCut] Applied " << initialization_name
+					<< " as the initial labeling." << std::endl;
+			}
+			result.initial_energy = graph_cut.compute_energy();
+			if (log_progress) {
+				std::cout << "Before optimization energy is " << result.initial_energy << std::endl;
+			}
+			graph_cut.expansion(20);
+			result.energy = graph_cut.compute_energy();
+			result.data_energy = graph_cut.giveDataEnergy();
+			result.smooth_energy = graph_cut.giveSmoothEnergy();
+			result.label_energy = graph_cut.giveLabelEnergy();
+			if (log_progress) {
+				std::cout << "After optimization energy is " << result.energy << std::endl;
+				std::cout << "***********" << std::endl;
+				std::cout << "DataEnergy: " << result.data_energy << std::endl;
+				std::cout << "SmoothEnergy: " << result.smooth_energy << std::endl;
+				std::cout << "LabelEnergy: " << result.label_energy << std::endl;
+				std::cout << "***********" << std::endl;
+			}
+
+			for (int node = 0; node < node_count; ++node) {
+				result.labels[static_cast<std::size_t>(node)] = graph_cut.whatLabel(node);
+			}
+			result.succeeded = true;
+		}
+		catch (GCException& exception) {
+			exception.Report();
+		}
+
+		return result;
+	}
+
+	struct RandomRestartSummary {
+		int restart = 0;
+		unsigned int seed = 0;
+		bool succeeded = false;
+		long long initial_energy = 0;
+		long long energy = 0;
+		long long data_energy = 0;
+		long long smooth_energy = 0;
+		long long label_energy = 0;
+		int label_count = 0;
+	};
+
+	struct RandomRestartTaskResult {
+		int restart = 0;
+		unsigned int seed = 0;
+		InitializedGraphCutResult graph_cut_result;
+	};
+
+	// Derives a stable, distinct seed for one restart from the user-provided
+	// base seed and restart index.
+	unsigned int DeriveRandomRestartSeed(unsigned int base_seed, int restart)
+	{
+		std::uint32_t value =
+			static_cast<std::uint32_t>(base_seed)
+			+ 0x9e3779b9u * (static_cast<std::uint32_t>(restart) + 1u);
+		value ^= value >> 16;
+		value *= 0x85ebca6bu;
+		value ^= value >> 13;
+		value *= 0xc2b2ae35u;
+		value ^= value >> 16;
+		return static_cast<unsigned int>(value);
+	}
+
+	// Resolves the requested worker count. Automatic mode is capped at four
+	// because each concurrent GCO instance owns sizeable graph work buffers.
+	int ResolveRandomRestartThreadCount(int requested_thread_count, int restart_count)
+	{
+		if (restart_count <= 0) {
+			return 1;
+		}
+		if (requested_thread_count > 0) {
+			return std::max(1, std::min(requested_thread_count, restart_count));
+		}
+
+		const unsigned int hardware_threads = std::thread::hardware_concurrency();
+		const int automatic_thread_count =
+			hardware_threads == 0 ? 1 : static_cast<int>(hardware_threads);
+		return std::max(1, std::min({ automatic_thread_count, restart_count, 4 }));
+	}
+
+	// Runs graph cut repeatedly from uniformly sampled feasible labels and
+	// returns the successful result with the lowest final total energy.
+	InitializedGraphCutResult RunRandomFeasibleLabelGraphCutRestarts(
+		int node_count,
+		int label_count,
+		const std::vector<std::vector<int>>& data_costs,
+		const std::vector<std::vector<int>>& adjacency,
+		const std::vector<int>& edge_lengths,
+		int restart_count,
+		unsigned int random_seed,
+		int requested_thread_count,
+		const std::string& context,
+		const std::string& report_file)
+	{
+		InitializedGraphCutResult best_result;
+		if (node_count <= 0
+			|| label_count <= 0
+			|| restart_count <= 0
+			|| data_costs.size() != static_cast<std::size_t>(node_count)) {
+			std::cerr << "[GraphCut] Cannot run random feasible-label restarts for "
+				<< context << " because the graph dimensions are invalid." << std::endl;
+			return best_result;
+		}
+
+		// Build each node's feasible-label list once. This avoids rescanning all
+		// labels during every random restart.
+		std::vector<std::vector<int>> feasible_labels(static_cast<std::size_t>(node_count));
+		for (int node = 0; node < node_count; ++node) {
+			const auto& node_costs = data_costs[static_cast<std::size_t>(node)];
+			if (node_costs.size() != static_cast<std::size_t>(label_count)) {
+				std::cerr << "[GraphCut] Cannot run random feasible-label restarts for "
+					<< context << " because data-cost row " << node
+					<< " has an invalid size." << std::endl;
+				return best_result;
+			}
+			auto& node_feasible_labels = feasible_labels[static_cast<std::size_t>(node)];
+			for (int label = 0; label < label_count; ++label) {
+				if (node_costs[static_cast<std::size_t>(label)] == 0) {
+					node_feasible_labels.push_back(label);
+				}
+			}
+			if (node_feasible_labels.empty()) {
+				std::cerr << "[GraphCut] Cannot run random feasible-label restarts for "
+					<< context << " because node " << node
+					<< " has no feasible label." << std::endl;
+				return best_result;
+			}
+		}
+
+		std::vector<RandomRestartSummary> restart_summaries;
+		restart_summaries.reserve(static_cast<std::size_t>(restart_count));
+		int best_restart = -1;
+		const int thread_count =
+			ResolveRandomRestartThreadCount(requested_thread_count, restart_count);
+		gcoclock(); // Initialize GCO's Windows timer frequency before workers start.
+		std::cout << "[GraphCut] Run " << restart_count << ' ' << context
+			<< " random restarts with " << thread_count
+			<< " worker thread(s), base_seed=" << random_seed << '.' << std::endl;
+
+		for (int batch_begin = 0; batch_begin < restart_count; batch_begin += thread_count) {
+			const int batch_end = std::min(restart_count, batch_begin + thread_count);
+			std::vector<std::future<RandomRestartTaskResult>> futures;
+			futures.reserve(static_cast<std::size_t>(batch_end - batch_begin));
+
+			for (int restart = batch_begin; restart < batch_end; ++restart) {
+				const unsigned int restart_seed =
+					DeriveRandomRestartSeed(random_seed, restart);
+				futures.push_back(std::async(
+					std::launch::async,
+					[&, restart, restart_seed]() {
+						std::mt19937 random_engine(restart_seed);
+						std::vector<int> initial_labels(
+							static_cast<std::size_t>(node_count),
+							0);
+						for (int node = 0; node < node_count; ++node) {
+							const auto& node_feasible_labels =
+								feasible_labels[static_cast<std::size_t>(node)];
+							std::uniform_int_distribution<std::size_t> distribution(
+								0,
+								node_feasible_labels.size() - 1);
+							initial_labels[static_cast<std::size_t>(node)] =
+								node_feasible_labels[distribution(random_engine)];
+						}
+
+						const std::string initialization_name =
+							context + " random restart " + std::to_string(restart + 1)
+							+ "/" + std::to_string(restart_count)
+							+ " (seed=" + std::to_string(restart_seed) + ")";
+						RandomRestartTaskResult task_result;
+						task_result.restart = restart;
+						task_result.seed = restart_seed;
+						task_result.graph_cut_result =
+							RunGeneralGraphCutWithInitialLabels(
+								node_count,
+								label_count,
+								data_costs,
+								adjacency,
+								edge_lengths,
+								initial_labels,
+								initialization_name,
+								false);
+						return task_result;
+					}));
+			}
+
+			for (auto& future : futures) {
+				const RandomRestartTaskResult task_result = future.get();
+				const InitializedGraphCutResult& restart_result =
+					task_result.graph_cut_result;
+				const int result_label_count = restart_result.succeeded
+					? static_cast<int>(std::unordered_set<int>(
+						restart_result.labels.begin(),
+						restart_result.labels.end()).size())
+					: 0;
+				restart_summaries.push_back({
+					task_result.restart + 1,
+					task_result.seed,
+					restart_result.succeeded,
+					restart_result.initial_energy,
+					restart_result.energy,
+					restart_result.data_energy,
+					restart_result.smooth_energy,
+					restart_result.label_energy,
+					result_label_count
+					});
+
+				std::cout << "[GraphCut] " << context
+					<< " restart " << (task_result.restart + 1)
+					<< "/" << restart_count
+					<< ", seed=" << task_result.seed
+					<< ", succeeded=" << restart_result.succeeded;
+				if (restart_result.succeeded) {
+					std::cout << ", initial_energy=" << restart_result.initial_energy
+						<< ", final_energy=" << restart_result.energy;
+				}
+				std::cout << std::endl;
+
+				if (restart_result.succeeded
+					&& restart_result.energy < best_result.energy) {
+					best_result = restart_result;
+					best_restart = task_result.restart;
+				}
+			}
+		}
+
+		if (best_restart >= 0) {
+			std::cout << "[GraphCut] Best " << context
+				<< " random restart=" << (best_restart + 1)
+				<< "/" << restart_count
+				<< ", energy=" << best_result.energy
+				<< ", DataEnergy=" << best_result.data_energy
+				<< ", SmoothEnergy=" << best_result.smooth_energy
+				<< ", LabelEnergy=" << best_result.label_energy
+				<< std::endl;
+		}
+
+		std::ofstream report(report_file);
+		if (report.is_open()) {
+			report
+				<< "restart,restart_seed,succeeded,initial_energy,final_energy,"
+				<< "data_energy,smooth_energy,label_energy,label_count,is_best\n";
+			for (const auto& summary : restart_summaries) {
+				report
+					<< summary.restart << ','
+					<< summary.seed << ','
+					<< (summary.succeeded ? 1 : 0) << ','
+					<< summary.initial_energy << ','
+					<< summary.energy << ','
+					<< summary.data_energy << ','
+					<< summary.smooth_energy << ','
+					<< summary.label_energy << ','
+					<< summary.label_count << ','
+					<< ((summary.restart == best_restart + 1) ? 1 : 0)
+					<< '\n';
+			}
+			std::cout << "[GraphCut] Random-restart report saved to "
+				<< report_file << std::endl;
+		}
+		else {
+			std::cerr << "[GraphCut] Cannot write random-restart report: "
+				<< report_file << std::endl;
+		}
+
+		return best_result;
 	}
 
 	struct LayerContainmentPolygon {
@@ -462,6 +1283,128 @@ namespace
 			&& z_diff <= (layer_height + slack);
 	}
 
+	// Tests the material slab generated by extruding a layer upward by one layer height.
+	// A small negative tolerance keeps points numerically on the lower plane in the slab.
+	bool IsPointWithinExtrudedLayerZSlab(double layer_z, double point_z, double layer_height, double slack)
+	{
+		const double z_diff = point_z - layer_z;
+		return z_diff >= -slack
+			&& z_diff <= layer_height + slack;
+	}
+
+	// Finds the nearest lower layer whose upward extrusion contains the point.
+	// Layers slightly above the point are considered only as a numerical fallback.
+	int FindContainingExtrudedMaterialLayer(
+		const Layer_Graph& layer_graph,
+		const std::vector<LayerContainmentPolygon>& outer_polygons,
+		const std::vector<std::vector<LayerContainmentPolygon>>& hole_polygons,
+		const Eigen::Vector3d& point,
+		double layer_height,
+		double z_slack,
+		double boundary_offset)
+	{
+		int best_layer_id = -1;
+		int best_z_category = 2;
+		double best_z_distance = MAX_D;
+		const Point_2 point_xy(point.x(), point.y());
+
+		for (int layer_id = 0; layer_id < layer_graph.total_node_num; ++layer_id) {
+			if (layer_id >= static_cast<int>(outer_polygons.size())
+				|| layer_id >= static_cast<int>(hole_polygons.size())) {
+				continue;
+			}
+
+			const auto index_it = layer_graph.data.index.find(layer_id);
+			if (index_it == layer_graph.data.index.end()) {
+				continue;
+			}
+			const int slice_id = index_it->second.first;
+			const int contour_id = index_it->second.second;
+			if (slice_id < 0
+				|| slice_id >= static_cast<int>(layer_graph.data.z_value.size())
+				|| contour_id < 0
+				|| contour_id >= static_cast<int>(layer_graph.data.z_value[slice_id].size())
+				|| layer_graph.data.z_value[slice_id][contour_id].empty()) {
+				continue;
+			}
+
+			const double layer_z = layer_graph.data.z_value[slice_id][contour_id][0];
+			if (!IsPointWithinExtrudedLayerZSlab(layer_z, point.z(), layer_height, z_slack)
+				|| !IsPointInsidePreparedMaterialRegion(
+					outer_polygons[layer_id],
+					hole_polygons[layer_id],
+					point_xy,
+					boundary_offset)) {
+				continue;
+			}
+
+			const double z_diff = point.z() - layer_z;
+			const int z_category = (z_diff >= 0.0) ? 0 : 1;
+			const double z_distance = std::abs(z_diff);
+			if (z_category < best_z_category
+				|| (z_category == best_z_category && z_distance < best_z_distance)) {
+				best_layer_id = layer_id;
+				best_z_category = z_category;
+				best_z_distance = z_distance;
+			}
+		}
+
+		return best_layer_id;
+	}
+
+	// Finds every material layer whose upward extrusion contains the point.
+	// Area-S constraints use all matches so overlapping layer components cannot
+	// hide an inaccessible point by assigning it only to a different component.
+	std::vector<int> FindContainingExtrudedMaterialLayers(
+		const Layer_Graph& layer_graph,
+		const std::vector<LayerContainmentPolygon>& outer_polygons,
+		const std::vector<std::vector<LayerContainmentPolygon>>& hole_polygons,
+		const Eigen::Vector3d& point,
+		double layer_height,
+		double z_slack,
+		double boundary_offset)
+	{
+		std::vector<int> layer_ids;
+		const Point_2 point_xy(point.x(), point.y());
+
+		for (int layer_id = 0; layer_id < layer_graph.total_node_num; ++layer_id) {
+			if (layer_id >= static_cast<int>(outer_polygons.size())
+				|| layer_id >= static_cast<int>(hole_polygons.size())) {
+				continue;
+			}
+
+			const auto index_it = layer_graph.data.index.find(layer_id);
+			if (index_it == layer_graph.data.index.end()) {
+				continue;
+			}
+			const int slice_id = index_it->second.first;
+			const int contour_id = index_it->second.second;
+			if (slice_id < 0
+				|| slice_id >= static_cast<int>(layer_graph.data.z_value.size())
+				|| contour_id < 0
+				|| contour_id >= static_cast<int>(layer_graph.data.z_value[slice_id].size())
+				|| layer_graph.data.z_value[slice_id][contour_id].empty()) {
+				continue;
+			}
+
+			const double layer_z = layer_graph.data.z_value[slice_id][contour_id][0];
+			if (IsPointWithinExtrudedLayerZSlab(
+					layer_z,
+					point.z(),
+					layer_height,
+					z_slack)
+				&& IsPointInsidePreparedMaterialRegion(
+					outer_polygons[layer_id],
+					hole_polygons[layer_id],
+					point_xy,
+					boundary_offset)) {
+				layer_ids.push_back(layer_id);
+			}
+		}
+
+		return layer_ids;
+	}
+
 	void WriteLineMarkerObj(
 		std::ofstream& obj,
 		int& next_vertex_index,
@@ -622,89 +1565,6 @@ namespace
 			<< std::endl;
 	}
 
-	void WriteDebugMarkersObj(
-		const std::string& output_file,
-		const std::vector<Eigen::Vector3d>& points,
-		const std::array<double, 3>& color,
-		double marker_radius)
-	{
-		EnsureParentDirectory(output_file);
-		std::ofstream ofs(output_file);
-		if (!ofs.is_open()) {
-			std::cout << "[AccessibilityDebug] cannot open file for writing: " << output_file << std::endl;
-			return;
-		}
-
-		ofs << std::setprecision(17);
-		ofs << "# marker_count " << points.size() << "\n";
-		const std::array<Eigen::Vector3d, 6> offsets = {
-			Eigen::Vector3d(marker_radius, 0.0, 0.0),
-			Eigen::Vector3d(-marker_radius, 0.0, 0.0),
-			Eigen::Vector3d(0.0, marker_radius, 0.0),
-			Eigen::Vector3d(0.0, -marker_radius, 0.0),
-			Eigen::Vector3d(0.0, 0.0, marker_radius),
-			Eigen::Vector3d(0.0, 0.0, -marker_radius)
-		};
-
-		int vertex_base = 1;
-		for (const auto& point : points) {
-			for (const auto& offset : offsets) {
-				const Eigen::Vector3d v = point + offset;
-				ofs << "v " << v.x() << " " << v.y() << " " << v.z() << " "
-					<< color[0] << " " << color[1] << " " << color[2] << "\n";
-			}
-
-			const int xp = vertex_base;
-			const int xn = vertex_base + 1;
-			const int yp = vertex_base + 2;
-			const int yn = vertex_base + 3;
-			const int zp = vertex_base + 4;
-			const int zn = vertex_base + 5;
-			ofs << "f " << zp << " " << xp << " " << yp << "\n";
-			ofs << "f " << zp << " " << yp << " " << xn << "\n";
-			ofs << "f " << zp << " " << xn << " " << yn << "\n";
-			ofs << "f " << zp << " " << yn << " " << xp << "\n";
-			ofs << "f " << zn << " " << yp << " " << xp << "\n";
-			ofs << "f " << zn << " " << xn << " " << yp << "\n";
-			ofs << "f " << zn << " " << yn << " " << xn << "\n";
-			ofs << "f " << zn << " " << xp << " " << yn << "\n";
-			vertex_base += static_cast<int>(offsets.size());
-		}
-
-		std::cout << "[AccessibilityDebug] wrote " << points.size()
-			<< " markers to " << output_file << std::endl;
-	}
-
-	bool GetLayerGraphNodeCentroid(const Layer_Graph& layer_graph, int node_id, Eigen::Vector3d& centroid)
-	{
-		const auto index_it = layer_graph.data.index.find(node_id);
-		if (index_it == layer_graph.data.index.end()) {
-			return false;
-		}
-
-		const int layer_id = index_it->second.first;
-		const int contour_id = index_it->second.second;
-		if (layer_id < 0 || layer_id >= static_cast<int>(layer_graph.data.slice_points.size())
-			|| contour_id < 0 || contour_id >= static_cast<int>(layer_graph.data.slice_points[layer_id].size())
-			|| contour_id >= static_cast<int>(layer_graph.data.z_value[layer_id].size())) {
-			return false;
-		}
-
-		const auto& contour = layer_graph.data.slice_points[layer_id][contour_id];
-		const auto& z_values = layer_graph.data.z_value[layer_id][contour_id];
-		if (contour.empty() || z_values.empty()) {
-			return false;
-		}
-
-		Eigen::Vector2d xy_sum(0.0, 0.0);
-		for (const auto& point : contour) {
-			xy_sum += point;
-		}
-		xy_sum /= static_cast<double>(contour.size());
-		centroid = Eigen::Vector3d(xy_sum.x(), xy_sum.y(), z_values.front());
-		return true;
-	}
-
 	std::string MakeAccessibilityDebugNodeTag(int height_of_beam_search, int cont_number_of_queue, int now_last_node)
 	{
 		return "_h" + std::to_string(height_of_beam_search)
@@ -729,905 +1589,6 @@ namespace
 		return token.empty() ? "model" : token;
 	}
 
-	std::vector<Eigen::Vector3d> CollectMappedVertexPoints(
-		const Eigen::MatrixXd& original_vertices,
-		const std::unordered_map<int, int>& point_to_vertex)
-	{
-		std::vector<Eigen::Vector3d> points;
-		points.reserve(point_to_vertex.size());
-		for (const auto& entry : point_to_vertex) {
-			const int vertex_id = entry.second;
-			if (vertex_id < 0 || vertex_id >= original_vertices.rows()) {
-				continue;
-			}
-
-			points.emplace_back(
-				original_vertices(vertex_id, 0),
-				original_vertices(vertex_id, 1),
-				original_vertices(vertex_id, 2));
-		}
-		return points;
-	}
-
-	void WriteInitialSubtractiveAllDirectionDebugVisualization(
-		const std::string& vis_dir,
-		const std::string& file_token,
-		double marker_radius,
-		const Eigen::MatrixXd& original_vertices,
-		const std::unordered_map<int, int>& map_S_and_vertex)
-	{
-		const auto inaccessible_points = CollectMappedVertexPoints(original_vertices, map_S_and_vertex);
-		WriteDebugMarkersObj(
-			JoinPath(vis_dir, "access_debug_subtractive_all_direction_inaccessible_" + file_token + ".obj"),
-			inaccessible_points,
-			{ 0.95, 0.05, 0.85 },
-			marker_radius);
-		WriteDebugMarkersObj(
-			JoinPath(vis_dir, "access_debug_subtractive_all_direction_inaccessible_centers_" + file_token + ".obj"),
-			inaccessible_points,
-			{ 0.95, 0.05, 0.85 },
-			0.03);
-	}
-
-	struct ToolCollisionDebugInfo {
-		std::string reason = "none";
-		int vertex_index = -1;
-		double height_diff = 0.0;
-		double dist_xy_sq = 0.0;
-		double z_threshold = 0.0;
-	};
-
-	bool CheckToolCollisionWithCellForDebug(
-		const Eigen::Vector3d& center_point,
-		const std::vector<Eigen::Vector3d>& target_cell_vertices,
-		double max_z_target,
-		const cutter& tool,
-		ToolCollisionDebugInfo& debug_info,
-		double z_threshold_divisor = 30.0)
-	{
-		debug_info = ToolCollisionDebugInfo{};
-		debug_info.z_threshold = tool.cylinder_r / z_threshold_divisor;
-		debug_info.height_diff = max_z_target - center_point.z();
-
-		if (debug_info.height_diff <= debug_info.z_threshold) {
-			debug_info.reason = "below_tool_tip_threshold";
-			return false;
-		}
-
-		if (debug_info.height_diff > tool.total_height) {
-			debug_info.reason = "beyond_tool_total_height";
-			return true;
-		}
-
-		if (!target_cell_vertices.empty()) {
-			const double dx = target_cell_vertices[0](0, 0) - center_point.x();
-			const double dy = target_cell_vertices[0](1, 0) - center_point.y();
-			const double dist_xy_sq = dx * dx + dy * dy;
-
-			if (debug_info.height_diff > tool.cylinder_height_threshold) {
-				if (dist_xy_sq > tool.carriage_check_radius_sq) {
-					debug_info.reason = "coarse_reject_carriage_xy";
-					debug_info.dist_xy_sq = dist_xy_sq;
-					debug_info.vertex_index = 0;
-					return false;
-				}
-			}
-			else {
-				if (dist_xy_sq > tool.cylinder_check_radius_sq) {
-					debug_info.reason = "coarse_reject_cylinder_xy";
-					debug_info.dist_xy_sq = dist_xy_sq;
-					debug_info.vertex_index = 0;
-					return false;
-				}
-			}
-		}
-
-		for (int vertex_index = 0; vertex_index < static_cast<int>(target_cell_vertices.size()); ++vertex_index) {
-			const auto& vertex = target_cell_vertices[vertex_index];
-			const double diff_z = vertex(2, 0) - center_point.z();
-			if (diff_z <= debug_info.z_threshold) {
-				continue;
-			}
-
-			const double dx = vertex(0, 0) - center_point.x();
-			const double dy = vertex(1, 0) - center_point.y();
-			const double dist_xy_sq = dx * dx + dy * dy;
-
-			if (diff_z <= tool.cylinder_height_threshold) {
-				if (dist_xy_sq < tool.cylinder_r_sq) {
-					debug_info.reason = "cylinder_radius_collision";
-					debug_info.height_diff = diff_z;
-					debug_info.dist_xy_sq = dist_xy_sq;
-					debug_info.vertex_index = vertex_index;
-					return true;
-				}
-			}
-			else if (diff_z <= tool.total_height) {
-				if (dist_xy_sq < tool.carriage_r_sq) {
-					debug_info.reason = "carriage_radius_collision";
-					debug_info.height_diff = diff_z;
-					debug_info.dist_xy_sq = dist_xy_sq;
-					debug_info.vertex_index = vertex_index;
-					return true;
-				}
-			}
-		}
-
-		debug_info.reason = "no_vertex_collision";
-		return false;
-	}
-
-	void WriteObjColoredVertex(
-		std::ofstream& obj,
-		const Eigen::Vector3d& point,
-		const std::array<double, 3>& color,
-		int& next_vertex_index)
-	{
-		obj << "v " << point.x() << " " << point.y() << " " << point.z() << " "
-			<< color[0] << " " << color[1] << " " << color[2] << "\n";
-		++next_vertex_index;
-	}
-
-	void WriteObjLine(std::ofstream& obj, int a, int b)
-	{
-		obj << "l " << a << " " << b << "\n";
-	}
-
-	std::vector<int> WriteObjRing(
-		std::ofstream& obj,
-		int& next_vertex_index,
-		const Eigen::Matrix3d& rotated_to_world,
-		const Eigen::Vector3d& center_rotated,
-		double z_offset,
-		double radius,
-		const std::array<double, 3>& color,
-		int segment_count = 32)
-	{
-		std::vector<int> ring_indices;
-		ring_indices.reserve(segment_count);
-		const double kPi = 3.14159265358979323846;
-		for (int i = 0; i < segment_count; ++i) {
-			const double theta = 2.0 * kPi * static_cast<double>(i) / static_cast<double>(segment_count);
-			const Eigen::Vector3d point_rotated(
-				center_rotated.x() + radius * std::cos(theta),
-				center_rotated.y() + radius * std::sin(theta),
-				center_rotated.z() + z_offset);
-			ring_indices.push_back(next_vertex_index);
-			WriteObjColoredVertex(obj, rotated_to_world * point_rotated, color, next_vertex_index);
-		}
-		for (int i = 0; i < segment_count; ++i) {
-			WriteObjLine(obj, ring_indices[i], ring_indices[(i + 1) % segment_count]);
-		}
-		return ring_indices;
-	}
-
-	void WriteToolCollisionCaseObj(
-		std::ofstream& obj,
-		int& next_vertex_index,
-		const Eigen::Matrix3d& rotated_to_world,
-		const Eigen::Vector3d& center_rotated,
-		const std::vector<Eigen::Vector3d>& blocker_cell_vertices_rotated,
-		const Eigen::Vector3d& target_point_world,
-		const cutter& tool,
-		int case_index,
-		int s_id,
-		int cell_id,
-		int orientation_id,
-		int blocker_cell_id,
-		const ToolCollisionDebugInfo& collision_info)
-	{
-		if (!obj.is_open()) {
-			return;
-		}
-
-		obj << "g collision_case_" << case_index
-			<< "_s_" << s_id
-			<< "_cell_" << cell_id
-			<< "_ori_" << orientation_id
-			<< "_blocker_" << blocker_cell_id
-			<< "\n";
-		obj << "# reason " << collision_info.reason
-			<< " height_diff " << collision_info.height_diff
-			<< " dist_xy_sq " << collision_info.dist_xy_sq << "\n";
-
-		const std::array<double, 3> axis_color = { 0.0, 0.85, 1.0 };
-		const std::array<double, 3> cylinder_color = { 1.0, 0.55, 0.05 };
-		const std::array<double, 3> carriage_color = { 1.0, 0.9, 0.05 };
-		const std::array<double, 3> blocker_color = { 1.0, 0.05, 0.05 };
-		const std::array<double, 3> target_color = { 1.0, 0.0, 0.9 };
-
-		const int axis_start = next_vertex_index;
-		WriteObjColoredVertex(obj, rotated_to_world * center_rotated, axis_color, next_vertex_index);
-		const int axis_end = next_vertex_index;
-		WriteObjColoredVertex(
-			obj,
-			rotated_to_world * (center_rotated + Eigen::Vector3d(0.0, 0.0, tool.total_height)),
-			axis_color,
-			next_vertex_index);
-		WriteObjLine(obj, axis_start, axis_end);
-
-		const auto cylinder_bottom = WriteObjRing(
-			obj, next_vertex_index, rotated_to_world, center_rotated, 0.0, tool.cylinder_r, cylinder_color);
-		const auto cylinder_top = WriteObjRing(
-			obj, next_vertex_index, rotated_to_world, center_rotated, tool.cylinder_height_threshold, tool.cylinder_r, cylinder_color);
-		const auto carriage_bottom = WriteObjRing(
-			obj, next_vertex_index, rotated_to_world, center_rotated, tool.cylinder_height_threshold, tool.carriage_r, carriage_color);
-		const auto carriage_top = WriteObjRing(
-			obj, next_vertex_index, rotated_to_world, center_rotated, tool.total_height, tool.carriage_r, carriage_color);
-		for (int i = 0; i < static_cast<int>(cylinder_bottom.size()); i += 4) {
-			WriteObjLine(obj, cylinder_bottom[i], cylinder_top[i]);
-			WriteObjLine(obj, carriage_bottom[i], carriage_top[i]);
-		}
-
-		if (!blocker_cell_vertices_rotated.empty()) {
-			std::vector<int> blocker_indices;
-			blocker_indices.reserve(blocker_cell_vertices_rotated.size());
-			for (const auto& point_rotated : blocker_cell_vertices_rotated) {
-				blocker_indices.push_back(next_vertex_index);
-				WriteObjColoredVertex(obj, rotated_to_world * point_rotated, blocker_color, next_vertex_index);
-			}
-			for (int i = 0; i < static_cast<int>(blocker_indices.size()); ++i) {
-				WriteObjLine(obj, blocker_indices[i], blocker_indices[(i + 1) % blocker_indices.size()]);
-			}
-		}
-
-		const double target_marker_radius = std::max(0.25, tool.cylinder_r * 0.15);
-		const int target_x0 = next_vertex_index;
-		WriteObjColoredVertex(obj, target_point_world - Eigen::Vector3d(target_marker_radius, 0.0, 0.0), target_color, next_vertex_index);
-		const int target_x1 = next_vertex_index;
-		WriteObjColoredVertex(obj, target_point_world + Eigen::Vector3d(target_marker_radius, 0.0, 0.0), target_color, next_vertex_index);
-		const int target_y0 = next_vertex_index;
-		WriteObjColoredVertex(obj, target_point_world - Eigen::Vector3d(0.0, target_marker_radius, 0.0), target_color, next_vertex_index);
-		const int target_y1 = next_vertex_index;
-		WriteObjColoredVertex(obj, target_point_world + Eigen::Vector3d(0.0, target_marker_radius, 0.0), target_color, next_vertex_index);
-		const int target_z0 = next_vertex_index;
-		WriteObjColoredVertex(obj, target_point_world - Eigen::Vector3d(0.0, 0.0, target_marker_radius), target_color, next_vertex_index);
-		const int target_z1 = next_vertex_index;
-		WriteObjColoredVertex(obj, target_point_world + Eigen::Vector3d(0.0, 0.0, target_marker_radius), target_color, next_vertex_index);
-		WriteObjLine(obj, target_x0, target_x1);
-		WriteObjLine(obj, target_y0, target_y1);
-		WriteObjLine(obj, target_z0, target_z1);
-	}
-
-	bool FindHighestZMappedVertex(
-		const Eigen::MatrixXd& original_vertices,
-		const std::vector<vasco::VoronoiCell>& voronoi_cells,
-		const std::unordered_map<int, int>& map_S_and_vertex,
-		const std::vector<bool>* active_cell_mask,
-		const std::vector<bool>* searched_s_flags,
-		int& s_id,
-		int& cell_id)
-	{
-		s_id = -1;
-		cell_id = -1;
-		double max_z = MIN_D;
-		for (const auto& entry : map_S_and_vertex) {
-			const int candidate_s_id = entry.first;
-			const int candidate_cell_id = entry.second;
-			if (searched_s_flags != nullptr
-				&& candidate_s_id >= 0
-				&& candidate_s_id < static_cast<int>(searched_s_flags->size())
-				&& (*searched_s_flags)[candidate_s_id]) {
-				continue;
-			}
-			if (candidate_cell_id < 0
-				|| candidate_cell_id >= original_vertices.rows()
-				|| candidate_cell_id >= static_cast<int>(voronoi_cells.size())
-				|| !voronoi_cells[candidate_cell_id].is_available
-				|| voronoi_cells[candidate_cell_id].all_points_in_polygon.empty()) {
-				continue;
-			}
-			if (active_cell_mask != nullptr
-				&& candidate_cell_id < static_cast<int>(active_cell_mask->size())
-				&& !(*active_cell_mask)[candidate_cell_id]) {
-				continue;
-			}
-
-			const double z = original_vertices(candidate_cell_id, 2);
-			if (z > max_z) {
-				max_z = z;
-				s_id = candidate_s_id;
-				cell_id = candidate_cell_id;
-			}
-		}
-
-		return s_id >= 0 && cell_id >= 0;
-	}
-
-	std::string MakeToolCollisionObjBasePath(const std::string& output_file)
-	{
-		const std::string extension = ".obj";
-		if (output_file.size() >= extension.size()
-			&& output_file.substr(output_file.size() - extension.size()) == extension) {
-			return output_file.substr(0, output_file.size() - extension.size());
-		}
-		return output_file;
-	}
-
-	void WriteHighestZInaccessiblePointAllOrientationToolCollisionObj(
-		const std::string& output_file,
-		const Eigen::MatrixXd& original_vertices,
-		const std::vector<vasco::VoronoiCell>& voronoi_cells,
-		const std::vector<Eigen::Vector3d>& orientation_samples,
-		const std::unordered_map<int, int>& map_S_and_vertex,
-		cutter tool,
-		int& selected_s_id,
-		int& selected_cell_id,
-		const std::vector<bool>* active_cell_mask = nullptr,
-		const std::vector<bool>* searched_s_flags = nullptr)
-	{
-		PrepareToolForCollision(tool);
-		selected_s_id = -1;
-		selected_cell_id = -1;
-		if (!FindHighestZMappedVertex(
-			original_vertices,
-			voronoi_cells,
-			map_S_and_vertex,
-			active_cell_mask,
-			searched_s_flags,
-			selected_s_id,
-			selected_cell_id)) {
-			return;
-		}
-
-		const std::string output_base = MakeToolCollisionObjBasePath(output_file);
-		const std::string index_file = output_base + "_index.csv";
-		std::ofstream index_report(index_file);
-		if (index_report.is_open()) {
-			index_report << std::setprecision(17);
-			index_report << "orientation_id,orientation_x,orientation_y,orientation_z,obj_file,blocker_cell,reason,height_diff,dist_xy_sq,center_x,center_y,center_z\n";
-		}
-
-		const Eigen::Vector3d target_point_world(
-			original_vertices(selected_cell_id, 0),
-			original_vertices(selected_cell_id, 1),
-			original_vertices(selected_cell_id, 2));
-
-		for (int ori = 0; ori < static_cast<int>(orientation_samples.size()); ++ori) {
-			const Eigen::Vector3d orientation_vector = orientation_samples[ori].normalized();
-			const Eigen::Matrix3d rot_matrix =
-				Eigen::Quaterniond::FromTwoVectors(Eigen::Vector3d(0, 0, 1), orientation_vector).toRotationMatrix();
-			const Eigen::Matrix3d rot_matrix_inverse = rot_matrix.inverse();
-
-			std::vector<Eigen::Vector3d> rotated_sites(original_vertices.rows());
-			for (int site_id = 0; site_id < original_vertices.rows(); ++site_id) {
-				rotated_sites[site_id] = rot_matrix_inverse * Eigen::Vector3d(
-					original_vertices(site_id, 0),
-					original_vertices(site_id, 1),
-					original_vertices(site_id, 2));
-			}
-
-			std::vector<std::vector<Eigen::Vector3d>> rotated_cell_vertices(voronoi_cells.size());
-			std::vector<double> max_z_of_cells(voronoi_cells.size(), MIN_D);
-			for (int other_cell_id = 0; other_cell_id < static_cast<int>(voronoi_cells.size()); ++other_cell_id) {
-				rotated_cell_vertices[other_cell_id].reserve(voronoi_cells[other_cell_id].all_points_in_polygon.size());
-				for (const auto& point : voronoi_cells[other_cell_id].all_points_in_polygon) {
-					Eigen::Vector3d rotated_point = rot_matrix_inverse * Eigen::Vector3d(point.x(), point.y(), point.z());
-					rotated_cell_vertices[other_cell_id].push_back(rotated_point);
-					max_z_of_cells[other_cell_id] = std::max(max_z_of_cells[other_cell_id], rotated_point.z());
-				}
-			}
-
-			Eigen::Vector3d normal(0.0, 0.0, 0.0);
-			const auto& selected_cell_vertices = rotated_cell_vertices[selected_cell_id];
-			for (int j = 0; j < static_cast<int>(selected_cell_vertices.size()); ++j) {
-				const Eigen::Vector3d& v1 = rotated_sites[voronoi_cells[selected_cell_id].site];
-				const Eigen::Vector3d& v2 = selected_cell_vertices[j];
-				const Eigen::Vector3d& v3 = selected_cell_vertices[(j + 1) % selected_cell_vertices.size()];
-				normal += (v2 - v1).cross(v3 - v1);
-			}
-			if (normal.norm() <= 1e-12) {
-				continue;
-			}
-			normal.normalize();
-
-			const Eigen::Vector3d center_point = ComputeToolCenter(
-				rotated_sites[voronoi_cells[selected_cell_id].site],
-				normal,
-				tool.cylinder_r);
-
-			int blocker_cell = -1;
-			ToolCollisionDebugInfo collision_info;
-			for (int other_cell_id = 0; other_cell_id < static_cast<int>(voronoi_cells.size()); ++other_cell_id) {
-				if (selected_cell_id == other_cell_id || !voronoi_cells[other_cell_id].is_available) {
-					continue;
-				}
-				if (active_cell_mask != nullptr
-					&& other_cell_id < static_cast<int>(active_cell_mask->size())
-					&& !(*active_cell_mask)[other_cell_id]) {
-					continue;
-				}
-				if (CheckToolCollisionWithCellForDebug(
-					center_point,
-					rotated_cell_vertices[other_cell_id],
-					max_z_of_cells[other_cell_id],
-					tool,
-					collision_info)) {
-					blocker_cell = other_cell_id;
-					break;
-				}
-			}
-
-			std::vector<Eigen::Vector3d> blocker_vertices;
-			if (blocker_cell >= 0) {
-				blocker_vertices = rotated_cell_vertices[blocker_cell];
-			}
-			else {
-				collision_info.reason = "no_collision";
-			}
-
-			const std::string orientation_obj_file = output_base + "_ori_" + std::to_string(ori) + ".obj";
-			std::ofstream obj(orientation_obj_file);
-			if (!obj.is_open()) {
-				std::cout << "[AccessibilityDebug] cannot open file for writing: " << orientation_obj_file << std::endl;
-				continue;
-			}
-
-			obj << std::setprecision(17);
-			obj << "# Tool collision visualization for the highest-z all-direction-inaccessible point\n";
-			obj << "# selected_s_id " << selected_s_id << "\n";
-			obj << "# selected_cell_id " << selected_cell_id << "\n";
-			obj << "# selected_point "
-				<< target_point_world.x() << " "
-				<< target_point_world.y() << " "
-				<< target_point_world.z() << "\n";
-			obj << "# orientation_id " << ori << "\n";
-			obj << "# orientation_vector "
-				<< orientation_vector.x() << " "
-				<< orientation_vector.y() << " "
-				<< orientation_vector.z() << "\n";
-			obj << "# Cyan line: tool axis\n";
-			obj << "# Green line: sampled tool direction vector from the selected point\n";
-			obj << "# Orange rings: cylinder radius envelope\n";
-			obj << "# Yellow ring: carriage radius envelope\n";
-			obj << "# Red loop: first blocker Voronoi cell for this orientation, if any\n";
-			obj << "# Magenta cross: selected inaccessible point\n";
-
-			int next_vertex_index = 1;
-			const std::array<double, 3> direction_color = { 0.0, 1.0, 0.25 };
-			const int direction_start = next_vertex_index;
-			WriteObjColoredVertex(obj, target_point_world, direction_color, next_vertex_index);
-			const int direction_end = next_vertex_index;
-			WriteObjColoredVertex(
-				obj,
-				target_point_world + orientation_vector * std::max(tool.total_height, tool.cylinder_r * 3.0),
-				direction_color,
-				next_vertex_index);
-			WriteObjLine(obj, direction_start, direction_end);
-
-			WriteToolCollisionCaseObj(
-				obj,
-				next_vertex_index,
-				rot_matrix,
-				center_point,
-				blocker_vertices,
-				target_point_world,
-				tool,
-				ori,
-				selected_s_id,
-				selected_cell_id,
-				ori,
-				blocker_cell,
-				collision_info);
-
-			if (index_report.is_open()) {
-				index_report << ori << ","
-					<< orientation_vector.x() << ","
-					<< orientation_vector.y() << ","
-					<< orientation_vector.z() << ","
-					<< orientation_obj_file << ","
-					<< blocker_cell << ","
-					<< collision_info.reason << ","
-					<< collision_info.height_diff << ","
-					<< collision_info.dist_xy_sq << ","
-					<< center_point.x() << ","
-					<< center_point.y() << ","
-					<< center_point.z() << "\n";
-			}
-		}
-
-		std::cout << "[AccessibilityDebug] wrote highest-z per-orientation tool collision visualizations with base "
-			<< output_base << "_ori_<id>.obj" << std::endl;
-	}
-
-	void WriteSubtractiveAllDirectionReasonDiagnostics(
-		const std::string& vis_dir,
-		const std::string& file_token,
-		const Eigen::MatrixXd& original_vertices,
-		const std::vector<vasco::VoronoiCell>& voronoi_cells,
-		const std::vector<Eigen::Vector3d>& orientation_samples,
-		const std::unordered_map<int, int>& map_S_and_vertex,
-		cutter tool)
-	{
-		if (map_S_and_vertex.empty() || orientation_samples.empty()) {
-			return;
-		}
-
-		PrepareToolForCollision(tool);
-		const double horizontal_z_threshold = 0.2;
-		std::vector<int> horizontal_orientation_ids;
-		for (int ori = 0; ori < static_cast<int>(orientation_samples.size()); ++ori) {
-			if (std::abs(orientation_samples[ori].z()) <= horizontal_z_threshold) {
-				horizontal_orientation_ids.push_back(ori);
-			}
-		}
-		if (horizontal_orientation_ids.empty()) {
-			return;
-		}
-
-		const std::string output_file =
-			JoinPath(vis_dir, "access_debug_subtractive_all_direction_reason_" + file_token + ".csv");
-		const std::string meta_file =
-			JoinPath(vis_dir, "access_debug_subtractive_all_direction_reason_" + file_token + "_meta.txt");
-		const std::string tool_collision_obj_file =
-			JoinPath(vis_dir, "access_debug_subtractive_initial_full_model_tool_collision_" + file_token + ".obj");
-		EnsureParentDirectory(output_file);
-		std::ofstream report(output_file);
-		if (!report.is_open()) {
-			std::cout << "[AccessibilityDebug] cannot open file for writing: " << output_file << std::endl;
-			return;
-		}
-		std::ofstream meta_report(meta_file);
-
-		report << std::setprecision(17);
-		const int max_diagnostic_points = 500;
-		int highest_z_s_id = -1;
-		int highest_z_cell_id = -1;
-		WriteHighestZInaccessiblePointAllOrientationToolCollisionObj(
-			tool_collision_obj_file,
-			original_vertices,
-			voronoi_cells,
-			orientation_samples,
-			map_S_and_vertex,
-			tool,
-			highest_z_s_id,
-			highest_z_cell_id);
-		if (meta_report.is_open()) {
-			meta_report << std::setprecision(17);
-			meta_report << "horizontal_z_threshold: " << horizontal_z_threshold << "\n";
-			meta_report << "horizontal_orientation_count: " << horizontal_orientation_ids.size() << "\n";
-			meta_report << "max_diagnostic_points: " << max_diagnostic_points << "\n";
-			meta_report << "tool_collision_obj_scope: initial full model, highest-z all-direction-inaccessible point, one OBJ per sampled orientation\n";
-			meta_report << "tool_collision_obj_selected_s_id: " << highest_z_s_id << "\n";
-			meta_report << "tool_collision_obj_selected_cell_id: " << highest_z_cell_id << "\n";
-			meta_report << "tool_collision_obj_base: " << MakeToolCollisionObjBasePath(tool_collision_obj_file) << "_ori_<id>.obj\n";
-			meta_report << "tool_collision_obj_index: " << MakeToolCollisionObjBasePath(tool_collision_obj_file) << "_index.csv\n";
-			meta_report << "tool.cylinder_r: " << tool.cylinder_r << "\n";
-			meta_report << "tool.cylinder_height: " << tool.cylinder_height << "\n";
-			meta_report << "tool.ball_r: " << tool.ball_r << "\n";
-			meta_report << "tool.carriage_r: " << tool.carriage_r << "\n";
-			meta_report << "tool.carriage_height: " << tool.carriage_height << "\n";
-			meta_report << "tool.total_height: " << tool.total_height << "\n";
-		}
-		report << "s_id,vertex_id,x,y,z,horizontal_accessible_count,"
-			<< "beyond_total_height_count,cylinder_collision_count,carriage_collision_count,other_collision_count,"
-			<< "most_horizontal_ori,orientation_x,orientation_y,orientation_z,first_blocker_cell,first_reason,"
-			<< "first_height_diff,first_dist_xy_sq,first_center_x,first_center_y,first_center_z\n";
-
-		std::vector<std::pair<int, int>> sorted_entries(map_S_and_vertex.begin(), map_S_and_vertex.end());
-		std::sort(sorted_entries.begin(), sorted_entries.end());
-		int diagnostic_point_count = 0;
-		for (const auto& entry : sorted_entries) {
-			if (diagnostic_point_count >= max_diagnostic_points) {
-				break;
-			}
-			++diagnostic_point_count;
-
-			const int s_id = entry.first;
-			const int cell_id = entry.second;
-			if (cell_id < 0 || cell_id >= static_cast<int>(voronoi_cells.size())
-				|| cell_id >= original_vertices.rows()
-				|| !voronoi_cells[cell_id].is_available
-				|| voronoi_cells[cell_id].all_points_in_polygon.empty()) {
-				continue;
-			}
-
-			int horizontal_accessible_count = 0;
-			int beyond_total_height_count = 0;
-			int cylinder_collision_count = 0;
-			int carriage_collision_count = 0;
-			int other_collision_count = 0;
-			int most_horizontal_ori = -1;
-			double most_horizontal_abs_z = MAX_D;
-			int first_blocker_cell = -1;
-			ToolCollisionDebugInfo first_collision_info;
-			Eigen::Vector3d first_center(0.0, 0.0, 0.0);
-
-			for (int ori : horizontal_orientation_ids) {
-				if (std::abs(orientation_samples[ori].z()) < most_horizontal_abs_z) {
-					most_horizontal_abs_z = std::abs(orientation_samples[ori].z());
-					most_horizontal_ori = ori;
-				}
-
-				const Eigen::Matrix3d rot_matrix =
-					Eigen::Quaterniond::FromTwoVectors(Eigen::Vector3d(0, 0, 1), orientation_samples[ori]).toRotationMatrix();
-				const Eigen::Matrix3d rot_matrix_inverse = rot_matrix.inverse();
-
-				std::vector<Eigen::Vector3d> rotated_sites(original_vertices.rows());
-				std::vector<std::vector<Eigen::Vector3d>> rotated_cell_vertices(voronoi_cells.size());
-				std::vector<double> max_z_of_cells(voronoi_cells.size(), MIN_D);
-				for (int site_id = 0; site_id < original_vertices.rows(); ++site_id) {
-					rotated_sites[site_id] = rot_matrix_inverse * Eigen::Vector3d(
-						original_vertices(site_id, 0),
-						original_vertices(site_id, 1),
-						original_vertices(site_id, 2));
-				}
-				for (int other_cell_id = 0; other_cell_id < static_cast<int>(voronoi_cells.size()); ++other_cell_id) {
-					rotated_cell_vertices[other_cell_id].reserve(voronoi_cells[other_cell_id].all_points_in_polygon.size());
-					for (const auto& point : voronoi_cells[other_cell_id].all_points_in_polygon) {
-						Eigen::Vector3d rotated_point = rot_matrix_inverse * Eigen::Vector3d(point.x(), point.y(), point.z());
-						rotated_cell_vertices[other_cell_id].push_back(rotated_point);
-						max_z_of_cells[other_cell_id] = std::max(max_z_of_cells[other_cell_id], rotated_point.z());
-					}
-				}
-
-				Eigen::Vector3d normal(0.0, 0.0, 0.0);
-				const auto& cell_vertices = rotated_cell_vertices[cell_id];
-				for (int j = 0; j < static_cast<int>(cell_vertices.size()); ++j) {
-					const Eigen::Vector3d& v1 = rotated_sites[voronoi_cells[cell_id].site];
-					const Eigen::Vector3d& v2 = cell_vertices[j];
-					const Eigen::Vector3d& v3 = cell_vertices[(j + 1) % cell_vertices.size()];
-					normal += (v2 - v1).cross(v3 - v1);
-				}
-				if (normal.norm() <= 1e-12) {
-					++other_collision_count;
-					continue;
-				}
-				normal.normalize();
-
-				const Eigen::Vector3d center_point = ComputeToolCenter(
-					rotated_sites[voronoi_cells[cell_id].site],
-					normal,
-					tool.cylinder_r);
-
-				bool collision = false;
-				ToolCollisionDebugInfo collision_info;
-				int blocker_cell = -1;
-				for (int other_cell_id = 0; other_cell_id < static_cast<int>(voronoi_cells.size()); ++other_cell_id) {
-					if (cell_id == other_cell_id || !voronoi_cells[other_cell_id].is_available) {
-						continue;
-					}
-
-					if (CheckToolCollisionWithCellForDebug(
-						center_point,
-						rotated_cell_vertices[other_cell_id],
-						max_z_of_cells[other_cell_id],
-						tool,
-						collision_info)) {
-						collision = true;
-						blocker_cell = other_cell_id;
-						break;
-					}
-				}
-
-				if (!collision) {
-					++horizontal_accessible_count;
-					continue;
-				}
-
-				if (first_blocker_cell == -1 && ori == most_horizontal_ori) {
-					first_blocker_cell = blocker_cell;
-					first_collision_info = collision_info;
-					first_center = center_point;
-				}
-
-				if (collision_info.reason == "beyond_tool_total_height") {
-					++beyond_total_height_count;
-				}
-				else if (collision_info.reason == "cylinder_radius_collision") {
-					++cylinder_collision_count;
-				}
-				else if (collision_info.reason == "carriage_radius_collision") {
-					++carriage_collision_count;
-				}
-				else {
-					++other_collision_count;
-				}
-			}
-
-			if (most_horizontal_ori != -1) {
-				first_blocker_cell = -1;
-				first_collision_info = ToolCollisionDebugInfo{};
-				first_center = Eigen::Vector3d(0.0, 0.0, 0.0);
-				const int ori = most_horizontal_ori;
-				const Eigen::Matrix3d rot_matrix =
-					Eigen::Quaterniond::FromTwoVectors(Eigen::Vector3d(0, 0, 1), orientation_samples[ori]).toRotationMatrix();
-				const Eigen::Matrix3d rot_matrix_inverse = rot_matrix.inverse();
-				std::vector<Eigen::Vector3d> rotated_sites(original_vertices.rows());
-				std::vector<std::vector<Eigen::Vector3d>> rotated_cell_vertices(voronoi_cells.size());
-				std::vector<double> max_z_of_cells(voronoi_cells.size(), MIN_D);
-				for (int site_id = 0; site_id < original_vertices.rows(); ++site_id) {
-					rotated_sites[site_id] = rot_matrix_inverse * Eigen::Vector3d(
-						original_vertices(site_id, 0),
-						original_vertices(site_id, 1),
-						original_vertices(site_id, 2));
-				}
-				for (int other_cell_id = 0; other_cell_id < static_cast<int>(voronoi_cells.size()); ++other_cell_id) {
-					for (const auto& point : voronoi_cells[other_cell_id].all_points_in_polygon) {
-						Eigen::Vector3d rotated_point = rot_matrix_inverse * Eigen::Vector3d(point.x(), point.y(), point.z());
-						rotated_cell_vertices[other_cell_id].push_back(rotated_point);
-						max_z_of_cells[other_cell_id] = std::max(max_z_of_cells[other_cell_id], rotated_point.z());
-					}
-				}
-				Eigen::Vector3d normal(0.0, 0.0, 0.0);
-				const auto& cell_vertices = rotated_cell_vertices[cell_id];
-				for (int j = 0; j < static_cast<int>(cell_vertices.size()); ++j) {
-					const Eigen::Vector3d& v1 = rotated_sites[voronoi_cells[cell_id].site];
-					const Eigen::Vector3d& v2 = cell_vertices[j];
-					const Eigen::Vector3d& v3 = cell_vertices[(j + 1) % cell_vertices.size()];
-					normal += (v2 - v1).cross(v3 - v1);
-				}
-				if (normal.norm() > 1e-12) {
-					normal.normalize();
-					first_center = ComputeToolCenter(rotated_sites[voronoi_cells[cell_id].site], normal, tool.cylinder_r);
-					for (int other_cell_id = 0; other_cell_id < static_cast<int>(voronoi_cells.size()); ++other_cell_id) {
-						if (cell_id == other_cell_id || !voronoi_cells[other_cell_id].is_available) {
-							continue;
-						}
-						if (CheckToolCollisionWithCellForDebug(
-							first_center,
-							rotated_cell_vertices[other_cell_id],
-							max_z_of_cells[other_cell_id],
-							tool,
-							first_collision_info)) {
-							first_blocker_cell = other_cell_id;
-							break;
-						}
-					}
-				}
-			}
-
-			const Eigen::Vector3d ori_vec =
-				(most_horizontal_ori >= 0) ? orientation_samples[most_horizontal_ori] : Eigen::Vector3d(0, 0, 0);
-			report << s_id << "," << cell_id << ","
-				<< original_vertices(cell_id, 0) << ","
-				<< original_vertices(cell_id, 1) << ","
-				<< original_vertices(cell_id, 2) << ","
-				<< horizontal_accessible_count << ","
-				<< beyond_total_height_count << ","
-				<< cylinder_collision_count << ","
-				<< carriage_collision_count << ","
-				<< other_collision_count << ","
-				<< most_horizontal_ori << ","
-				<< ori_vec.x() << "," << ori_vec.y() << "," << ori_vec.z() << ","
-				<< first_blocker_cell << ","
-				<< first_collision_info.reason << ","
-				<< first_collision_info.height_diff << ","
-				<< first_collision_info.dist_xy_sq << ","
-				<< first_center.x() << ","
-				<< first_center.y() << ","
-				<< first_center.z() << "\n";
-		}
-
-		std::cout << "[AccessibilityDebug] wrote subtractive all-direction reason report to "
-			<< output_file << std::endl;
-	}
-
-	void WriteSubtractiveAccessibilityDebugVisualizations(
-		const std::string& vis_dir,
-		const std::string& node_tag,
-		double marker_radius,
-		const Eigen::MatrixXd& original_vertices,
-		const std::vector<bool>& judge_S_be_searched,
-		const std::vector<bool>& judge_covering_points_be_searched,
-		const std::unordered_map<int, int>& map_S_and_vertex,
-		const std::unordered_map<int, int>& map_covering_points_and_vertex)
-	{
-		std::vector<Eigen::Vector3d> remaining_subtractive_points;
-		for (int point_id = 0; point_id < static_cast<int>(judge_S_be_searched.size()); ++point_id) {
-			if (judge_S_be_searched[point_id]) {
-				continue;
-			}
-
-			const auto map_it = map_S_and_vertex.find(point_id);
-			if (map_it == map_S_and_vertex.end()) {
-				continue;
-			}
-
-			const int vertex_id = map_it->second;
-			if (vertex_id < 0 || vertex_id >= original_vertices.rows()) {
-				continue;
-			}
-
-			remaining_subtractive_points.emplace_back(
-				original_vertices(vertex_id, 0),
-				original_vertices(vertex_id, 1),
-				original_vertices(vertex_id, 2));
-		}
-		WriteDebugMarkersObj(
-			JoinPath(vis_dir, "access_debug_subtractive_remaining_S" + node_tag + ".obj"),
-			remaining_subtractive_points,
-			{ 1.0, 0.05, 0.05 },
-			marker_radius);
-		WriteDebugMarkersObj(
-			JoinPath(vis_dir, "access_debug_subtractive_all_direction_remaining" + node_tag + ".obj"),
-			remaining_subtractive_points,
-			{ 0.95, 0.05, 0.85 },
-			marker_radius);
-
-		std::vector<Eigen::Vector3d> remaining_covering_points;
-		for (int point_id = 0; point_id < static_cast<int>(judge_covering_points_be_searched.size()); ++point_id) {
-			if (judge_covering_points_be_searched[point_id]) {
-				continue;
-			}
-
-			const auto map_it = map_covering_points_and_vertex.find(point_id);
-			if (map_it == map_covering_points_and_vertex.end()) {
-				continue;
-			}
-
-			const int vertex_id = map_it->second;
-			if (vertex_id < 0 || vertex_id >= original_vertices.rows()) {
-				continue;
-			}
-
-			remaining_covering_points.emplace_back(
-				original_vertices(vertex_id, 0),
-				original_vertices(vertex_id, 1),
-				original_vertices(vertex_id, 2));
-		}
-		WriteDebugMarkersObj(
-			JoinPath(vis_dir, "access_debug_subtractive_remaining_covering" + node_tag + ".obj"),
-			remaining_covering_points,
-			{ 0.05, 0.35, 1.0 },
-			marker_radius);
-	}
-
-	std::vector<bool> BuildActiveOriginalVertexMask(
-		const Eigen::MatrixXd& original_vertices,
-		const std::vector<Vertex>& current_vertices,
-		double eps = 0.001)
-	{
-		std::vector<bool> active(original_vertices.rows(), false);
-		for (int i = 0; i < original_vertices.rows(); ++i) {
-			for (const auto& vertex : current_vertices) {
-				if (std::abs(original_vertices(i, 0) - vertex.x) <= eps
-					&& std::abs(original_vertices(i, 1) - vertex.y) <= eps
-					&& std::abs(original_vertices(i, 2) - vertex.z) <= eps) {
-					active[i] = true;
-					break;
-				}
-			}
-		}
-		return active;
-	}
-
-	void WriteAdditiveAccessibilityDebugVisualization(
-		const std::string& vis_dir,
-		const Layer_Graph& layer_graph,
-		const std::string& node_tag,
-		int orientation_id,
-		double marker_radius)
-	{
-		std::set<int> additive_collision_target_nodes;
-		for (int edge_id = layer_graph.cont_normal_dependency_edges;
-			edge_id < static_cast<int>(layer_graph.temp_edges.size());
-			++edge_id) {
-			additive_collision_target_nodes.insert(layer_graph.temp_edges[edge_id].second);
-		}
-
-		std::vector<Eigen::Vector3d> additive_collision_points;
-		additive_collision_points.reserve(additive_collision_target_nodes.size());
-		for (int node_id : additive_collision_target_nodes) {
-			Eigen::Vector3d centroid;
-			if (GetLayerGraphNodeCentroid(layer_graph, node_id, centroid)) {
-				additive_collision_points.push_back(centroid);
-			}
-		}
-
-		if (additive_collision_points.empty()) {
-			return;
-		}
-
-		WriteDebugMarkersObj(
-			JoinPath(vis_dir, "access_debug_additive_collision_targets"
-				+ node_tag
-				+ "_ori" + std::to_string(orientation_id) + ".obj"),
-			additive_collision_points,
-			{ 1.0, 0.55, 0.05 },
-			marker_radius);
-	}
-
 }
 
 void HybridManufacturing::BuildSurfaceMeshSlices(std::vector<SurfaceMeshSliceData>& slices) const
@@ -1638,26 +1599,24 @@ void HybridManufacturing::BuildSurfaceMeshSlices(std::vector<SurfaceMeshSliceDat
 		return;
 	}
 
-	//std::vector<Eigen::Vector3d> face_normals;
-	//face_normals.reserve(current_node_mesh_rotated.number_of_faces());
-	//int face_id = 0;
-	//for (auto face : current_node_mesh_rotated.faces()) {
-	//	auto halfedge = current_node_mesh_rotated.halfedge(face);
-	//	auto v0 = current_node_mesh_rotated.target(halfedge);
-	//	auto v1 = current_node_mesh_rotated.target(current_node_mesh_rotated.next(halfedge));
-	//	auto v2 = current_node_mesh_rotated.target(current_node_mesh_rotated.next(current_node_mesh_rotated.next(halfedge)));
-	//	const auto& p0 = current_node_mesh_rotated.point(v0);
-	//	const auto& p1 = current_node_mesh_rotated.point(v1);
-	//	const auto& p2 = current_node_mesh_rotated.point(v2);
-	//	Eigen::Vector3d e1(p1.x() - p0.x(), p1.y() - p0.y(), p1.z() - p0.z());
-	//	Eigen::Vector3d e2(p2.x() - p0.x(), p2.y() - p0.y(), p2.z() - p0.z());
-	//	Eigen::Vector3d normal = e1.cross(e2);
-	//	if (normal.norm() > 0.0) {
-	//		normal.normalize();
-	//	}
-	//	face_normals.push_back(normal);
-	//}
-	//slice_data.face_normals = face_normals;
+	// Keep the normal array indexed by SurfaceMesh::Face_index because layer
+	// contours store global face IDs rather than a compact local face order.
+	std::vector<Eigen::Vector3d> face_normals(
+		current_node_mesh_rotated.number_of_faces(),
+		Eigen::Vector3d::Zero());
+	for (auto face_index : current_node_mesh_rotated.faces()) {
+		const std::size_t normal_index = static_cast<std::size_t>(face_index.idx());
+		if (normal_index >= face_normals.size()) {
+			continue;
+		}
+		Eigen::Vector3d normal;
+		if (ComputeSelfSupportFaceNormal(
+			current_node_mesh_rotated,
+			face_index,
+			normal)) {
+			face_normals[normal_index] = normal;
+		}
+	}
 
 
 	std::vector<SurfaceMesh::Vertex_index> vi_z_sorted;
@@ -1702,6 +1661,11 @@ void HybridManufacturing::BuildSurfaceMeshSlices(std::vector<SurfaceMeshSliceDat
 				std::cout << "empty slice at z = " << layer_z << std::endl;
 			}
 			else {
+				// GetTrianglesForSurfaceMeshSlices concatenates these arrays before
+				// indexing them with global face IDs, so one complete copy is enough.
+				if (slices.empty()) {
+					slice_data.face_normals = face_normals;
+				}
 				slices.push_back(std::move(slice_data));
 			}
 			layer_z += layer_height_value;
@@ -2133,6 +2097,56 @@ namespace
 		return selected;
 	}
 
+	// Finds unresolved subtractive-inaccessible source vertices referenced by
+	// the final removed surface. Quantized lookup keeps this validation near
+	// linearithmic instead of comparing every area_S with every removed face.
+	std::vector<std::pair<int, int>> FindUnresolvedAreaSOnRemovedSurface(
+		const Slicer_2& slicer,
+		const std::vector<TRiangle>& removed_surface_triangles,
+		const Eigen::MatrixXd& original_vertices,
+		const std::unordered_map<int, int>& map_s_to_vertex,
+		const std::vector<bool>& searched_s_flags)
+	{
+		std::set<vasco::contact_triangulation::QuantizedPointKey> removed_vertex_keys;
+		for (const TRiangle& triangle : removed_surface_triangles) {
+			for (int corner = 0; corner < 3; ++corner) {
+				const int vertex_id = triangle[corner];
+				if (vertex_id < 0 || vertex_id >= static_cast<int>(slicer.positions.size())) {
+					continue;
+				}
+				const auto& point = slicer.positions[vertex_id];
+				removed_vertex_keys.insert(vasco::contact_triangulation::MakeQuantizedKey(
+					Point_3(point[0], point[1], point[2]),
+					1e6));
+			}
+		}
+
+		std::vector<std::pair<int, int>> hits;
+		for (const auto& entry : map_s_to_vertex) {
+			const int s_id = entry.first;
+			const int original_vertex_id = entry.second;
+			if (s_id < 0
+				|| s_id >= static_cast<int>(searched_s_flags.size())
+				|| searched_s_flags[s_id]
+				|| original_vertex_id < 0
+				|| original_vertex_id >= original_vertices.rows()) {
+				continue;
+			}
+
+			const auto key = vasco::contact_triangulation::MakeQuantizedKey(
+				Point_3(
+					original_vertices(original_vertex_id, 0),
+					original_vertices(original_vertex_id, 1),
+					original_vertices(original_vertex_id, 2)),
+				1e6);
+			if (removed_vertex_keys.find(key) != removed_vertex_keys.end()) {
+				hits.emplace_back(s_id, original_vertex_id);
+			}
+		}
+		std::sort(hits.begin(), hits.end());
+		return hits;
+	}
+
 	std::vector<std::vector<int>> CollectUnselectedFaceComponents(
 		const Slicer_2& slicer,
 		const std::vector<bool>& selected_faces)
@@ -2432,6 +2446,83 @@ namespace
 
 		return has_finite_referenced_vertex;
 	}
+
+	struct OriginalFacePlane {
+		Eigen::Vector3d origin = Eigen::Vector3d::Zero();
+		Eigen::Vector3d unit_normal = Eigen::Vector3d::Zero();
+		bool is_valid = false;
+	};
+
+	// Computes a model-scale tolerance for deciding whether a candidate face
+	// actually lies on an original input face instead of merely projecting onto it.
+	double ComputeOriginalSurfacePlaneTolerance(const Eigen::MatrixXd& vertices)
+	{
+		if (vertices.rows() == 0 || vertices.cols() < 3) {
+			return 1e-6;
+		}
+
+		const Eigen::RowVector3d minimum = vertices.leftCols<3>().colwise().minCoeff();
+		const Eigen::RowVector3d maximum = vertices.leftCols<3>().colwise().maxCoeff();
+		const double model_diagonal = (maximum - minimum).norm();
+		if (!std::isfinite(model_diagonal)) {
+			return 1e-6;
+		}
+		return std::clamp(model_diagonal * 1e-6, 1e-6, 1e-3);
+	}
+
+	// Precomputes original face planes once so the surface filter can reject
+	// historical cap faces without repeatedly rebuilding plane normals.
+	std::vector<OriginalFacePlane> BuildOriginalFacePlanes(
+		const Eigen::MatrixXd& vertices,
+		const Eigen::MatrixXi& faces,
+		std::size_t face_count)
+	{
+		std::vector<OriginalFacePlane> planes(face_count);
+		for (std::size_t face_id = 0; face_id < face_count; ++face_id) {
+			const int v0 = faces(static_cast<int>(face_id), 0);
+			const int v1 = faces(static_cast<int>(face_id), 1);
+			const int v2 = faces(static_cast<int>(face_id), 2);
+			if (v0 < 0 || v1 < 0 || v2 < 0
+				|| v0 >= vertices.rows()
+				|| v1 >= vertices.rows()
+				|| v2 >= vertices.rows()) {
+				continue;
+			}
+
+			OriginalFacePlane& plane = planes[face_id];
+			plane.origin = vertices.row(v0).transpose();
+			const Eigen::Vector3d edge01 =
+				(vertices.row(v1) - vertices.row(v0)).transpose();
+			const Eigen::Vector3d edge02 =
+				(vertices.row(v2) - vertices.row(v0)).transpose();
+			plane.unit_normal = edge01.cross(edge02);
+			const double normal_length = plane.unit_normal.norm();
+			if (!plane.unit_normal.allFinite() || normal_length <= 1e-12) {
+				plane.unit_normal.setZero();
+				continue;
+			}
+			plane.unit_normal /= normal_length;
+			plane.is_valid = true;
+		}
+		return planes;
+	}
+
+	// Returns true only when every candidate vertex is within the allowed
+	// perpendicular distance of the original face plane.
+	bool IsTriangleOnOriginalFacePlane(
+		const Eigen::Vector3d& v0,
+		const Eigen::Vector3d& v1,
+		const Eigen::Vector3d& v2,
+		const OriginalFacePlane& plane,
+		double tolerance)
+	{
+		if (!plane.is_valid) {
+			return false;
+		}
+		return std::abs((v0 - plane.origin).dot(plane.unit_normal)) <= tolerance
+			&& std::abs((v1 - plane.origin).dot(plane.unit_normal)) <= tolerance
+			&& std::abs((v2 - plane.origin).dot(plane.unit_normal)) <= tolerance;
+	}
 }
 
 HybridManufacturing::HybridManufacturing(std::string input_folder, std::string suf, Eigen::MatrixXd V, Eigen::MatrixXi F, Eigen::MatrixXd N)
@@ -2443,6 +2534,7 @@ HybridManufacturing::HybridManufacturing(std::string input_folder, std::string s
 	this->input_folder = input_folder + "\\" + suf;
 	this->suf = suf;
 	open_vis_additive_accessibility_debug = false;
+	open_vis_additive_self_support_debug = false;
 	InitializeSurfaceMeshFromVF();
 	InitializePolyscope();
 }
@@ -2461,6 +2553,42 @@ std::string HybridManufacturing::VisDir() const
 std::string HybridManufacturing::VisPath(const std::string& output_file_name) const
 {
 	return JoinPath(VisDir(), output_file_name);
+}
+
+// Returns the per-model directory for accessibility and inaccessible-point diagnostics.
+std::string HybridManufacturing::UnaccessibleVisDir() const
+{
+	const std::string dir = JoinPath(VisDir(), "unaccessible");
+	EnsureDirectory(dir);
+	return dir;
+}
+
+// Builds a path under vis\unaccessible and creates the category directory on demand.
+std::string HybridManufacturing::UnaccessibleVisPath(const std::string& output_file_name) const
+{
+	return JoinPath(UnaccessibleVisDir(), output_file_name);
+}
+
+// Returns the per-model directory for subtractive patch outputs and merged-patch diagnostics.
+std::string HybridManufacturing::PatchVisDir() const
+{
+	const std::string dir = JoinPath(VisDir(), "patch");
+	EnsureDirectory(dir);
+	return dir;
+}
+
+// Builds a path under vis\patch and creates the category directory on demand.
+std::string HybridManufacturing::PatchVisPath(const std::string& output_file_name) const
+{
+	return JoinPath(PatchVisDir(), output_file_name);
+}
+
+// Builds a path under the dedicated ancestor-source report directory.
+std::string HybridManufacturing::AncestorSourceVisPath(const std::string& output_file_name) const
+{
+	const std::string dir = JoinPath(VisDir(), "ancestor_sources");
+	EnsureDirectory(dir);
+	return JoinPath(dir, output_file_name);
 }
 
 void HybridManufacturing::SetContactFaceTriangulationMode(ContactFaceTriangulationMode mode)
@@ -2498,9 +2626,13 @@ std::vector<TRiangle> HybridManufacturing::FilterSurfaceRemoveTriangles(
 	std::vector<TRiangle> surface_triangles;
 	surface_triangles.reserve(remove_triangles.size());
 
-	const size_t face_cnt = Normals.rows();
+	const std::size_t face_cnt = static_cast<std::size_t>(
+		std::min(F.rows(), Normals.rows()));
 	const double bottom_filter_threshold = 2.0;
 	const double bottom_normal_abs_z_threshold = 0.9;
+	const double surface_plane_tolerance = ComputeOriginalSurfacePlaneTolerance(V);
+	const std::vector<OriginalFacePlane> original_face_planes =
+		BuildOriginalFacePlanes(V, F, face_cnt);
 	double model_min_z = MAX_D;
 	for (int i = 0; i < V.rows(); ++i) {
 		model_min_z = std::min(model_min_z, V(i, 2));
@@ -2537,6 +2669,14 @@ std::vector<TRiangle> HybridManufacturing::FilterSurfaceRemoveTriangles(
 		for (size_t j = 0; j < face_cnt; j++) {
 			double n_dot = normal_vector.dot(Normals.row(j));
 			if (fabs(n_dot) < 0.999) {
+				continue;
+			}
+			if (!IsTriangleOnOriginalFacePlane(
+				v1,
+				v2,
+				v3,
+				original_face_planes[j],
+				surface_plane_tolerance)) {
 				continue;
 			}
 			Eigen::Vector3d v1_s(v1.x(), v1.y(), v1.z());
@@ -2981,18 +3121,20 @@ int HybridManufacturing::CollisionDetectionForSubtractiveManufacturing(cutter th
 	for(int i =0;i < temp_all_the_covering_points.size() / 10;i++)
 		vis_green_points.push_back(temp_V_vis[temp_map_covering_points_and_vertex[i]]);*/
 		/////////////////////////////////////////////////////////
+	const std::string accessibility_point_vis_prefix =
+		UnaccessibleVisPath(MakeAccessibilityDebugFileToken(file_name));
 	if (open_vis_red_points == true)
-		createRedBalls(file_name, vis_red_points);
+		createRedBalls(accessibility_point_vis_prefix, vis_red_points);
 	if (open_vis_green_points == true)
-		createGreenBalls(file_name, vis_green_points, color_map);
-	WriteInitialSubtractiveAllDirectionDebugVisualization(
-		VisDir(),
+		createGreenBalls(accessibility_point_vis_prefix, vis_green_points, color_map);
+	accessibility_visualization::WriteInitialSubtractiveAllDirectionDebugVisualization(
+		UnaccessibleVisDir(),
 		MakeAccessibilityDebugFileToken(file_name),
 		std::max(0.25, dh * 0.15),
 		V,
 		map_S_and_vertex);
-	//WriteSubtractiveAllDirectionReasonDiagnostics(
-	//	VisDir(),
+	//accessibility_visualization::WriteSubtractiveAllDirectionReasonDiagnostics(
+	//	UnaccessibleVisDir(),
 	//	MakeAccessibilityDebugFileToken(file_name),
 	//	V,
 	//	all_voronoi_cells,
@@ -3748,7 +3890,8 @@ void HybridManufacturing::VisualizeCutLayers(
 		visualize_layers_stair_case(vis_file, vis_file_contain, current_orientation, judge_continue_additive, id_continue);
 
 	if (open_vis_stair_case == true && !map_S_and_vertex.empty()) {
-		const std::string report_file = VisPath(MakeAccessibilityDebugFileToken(vis_file) + "_subtractive_S_overlap.csv");
+		const std::string report_file = UnaccessibleVisPath(
+			MakeAccessibilityDebugFileToken(vis_file) + "_subtractive_S_overlap.csv");
 		std::ofstream report(report_file);
 		if (report.is_open()) {
 			report << std::setprecision(17);
@@ -3945,6 +4088,9 @@ Layer_Graph HybridManufacturing::BuildAdditiveLayerGraphWithSurfaceMesh(
 	Layer_Graph layer_graph(surface_data);
 	clock_t start_time_4 = clock();
 	layer_graph.BuildLayerGraphFromSurfaceMeshSlices(slices, the_nozzle);
+	PopulateLayerSelfSupportDiagnostics(
+		slices,
+		layer_graph);
 	clock_t end_time_4 = clock();
 	graph_time += double(end_time_4 - start_time_4) / CLOCKS_PER_SEC;
 
@@ -3954,8 +4100,7 @@ Layer_Graph HybridManufacturing::BuildAdditiveLayerGraphWithSurfaceMesh(
 std::vector<std::vector<int>> HybridManufacturing::EvaluateMergedPatchToolCollision(
 	const Slicer_2& merged_patch,
 	const std::vector<int>& merged_face_source_patch_id,
-	cutter cutting_tool,
-	bool is_local = false) const
+	cutter cutting_tool) const
 {
 	const int face_count = static_cast<int>(merged_patch.triangles.size());
 	const int ori_count = static_cast<int>(sampling_subtractive.sample_points.size());
@@ -3989,38 +4134,6 @@ std::vector<std::vector<int>> HybridManufacturing::EvaluateMergedPatchToolCollis
 		}
 		sample_points[i] = p;
 	}
-	// 每个三角面的采样点（内心）
-	Slicer_2 global_slicer;
-	std::vector<vasco::core::Vec3> sample_points_global;
-	int global_face_count = 0;
-	if (is_local) {
-		global_slicer.load(file_name + ".obj");
-		sample_points_global.resize(global_slicer.triangles.size());
-		global_face_count = static_cast<int>(global_slicer.triangles.size());
-		for (int i = 0; i < global_face_count; ++i) {
-			const auto& tri = global_slicer.triangles[i];
-			const auto& v1 = global_slicer.positions[tri[0]];
-			const auto& v2 = global_slicer.positions[tri[1]];
-			const auto& v3 = global_slicer.positions[tri[2]];
-
-			double a = distance3d(v1, v2);
-			double b = distance3d(v1, v3);
-			double c = distance3d(v2, v3);
-
-			vasco::core::Vec3 p{};
-			if (a + b + c == 0.0) {
-				p = v1;
-			}
-			else {
-				for (int k = 0; k < 3; ++k) {
-					p[k] = (a * v1[k] + b * v2[k] + c * v3[k]) / (a + b + c);
-				}
-			}
-			sample_points_global[i] = p;
-		}
-	}
-
-
 	PrepareToolForCollision(cutting_tool);
 
 	for (int ori = 0; ori < ori_count; ++ori) {
@@ -4041,25 +4154,6 @@ std::vector<std::vector<int>> HybridManufacturing::EvaluateMergedPatchToolCollis
 			temp_samples[i](2, 0) = sample_points[i][2];
 		}
 
-		std::vector<std::vector<Eigen::Vector3d>> temp_faces_global(global_face_count, std::vector<Eigen::Vector3d>(3));
-		std::vector<Eigen::Vector3d> temp_samples_global(global_face_count);
-
-		if (is_local) {
-			for (int i = 0; i < global_face_count; ++i) {
-				for (int k = 0; k < 3; ++k) {
-					int vid = global_slicer.triangles[i][k];
-					temp_faces_global[i][k](0, 0) = global_slicer.positions[vid][0];
-					temp_faces_global[i][k](1, 0) = global_slicer.positions[vid][1];
-					temp_faces_global[i][k](2, 0) = global_slicer.positions[vid][2];
-				}
-			}
-			for (int i = 0; i < global_face_count; ++i) {
-				temp_samples_global[i](0, 0) = sample_points_global[i][0];
-				temp_samples_global[i](1, 0) = sample_points_global[i][1];
-				temp_samples_global[i](2, 0) = sample_points_global[i][2];
-			}
-		}
-
 		Eigen::Vector3d vectorBefore(0, 0, 1);
 		Eigen::Vector3d vectorAfter(sampling_subtractive.sample_points[ori]);
 		vectorAfter.normalize();
@@ -4073,28 +4167,10 @@ std::vector<std::vector<int>> HybridManufacturing::EvaluateMergedPatchToolCollis
 			temp_samples[i] = rotMatrix.inverse() * temp_samples[i];
 		}
 
-		if (is_local) {
-			for (int i = 0; i < global_face_count; ++i) {
-				for (int k = 0; k < 3; ++k) {
-					temp_faces_global[i][k] = rotMatrix.inverse() * temp_faces_global[i][k];
-				}
-				temp_samples_global[i] = rotMatrix.inverse() * temp_samples_global[i];
-			}
-		}
-
 		std::vector<double> max_z_of_faces(face_count, MIN_D);
 		for (int i = 0; i < face_count; ++i) {
 			for (int k = 0; k < 3; ++k) {
 				max_z_of_faces[i] = std::max(max_z_of_faces[i], temp_faces[i][k](2, 0));
-			}
-		}
-
-		std::vector<double> max_z_of_faces_global(global_face_count, MIN_D);
-		if (is_local) {
-			for (int i = 0; i < global_face_count; ++i) {
-				for (int k = 0; k < 3; ++k) {
-					max_z_of_faces_global[i] = std::max(max_z_of_faces_global[i], temp_faces_global[i][k](2, 0));
-				}
 			}
 		}
 
@@ -4107,18 +4183,6 @@ std::vector<std::vector<int>> HybridManufacturing::EvaluateMergedPatchToolCollis
 			Eigen::Vector3d n = (v2 - v1).cross(v3 - v1);
 			n.normalize();
 			normals[i] = n;
-		}
-
-		std::vector<Eigen::Vector3d> normals_global(global_face_count);
-		if (is_local) {
-			for (int i = 0; i < global_face_count; ++i) {
-				const Eigen::Vector3d v1(temp_faces_global[i][0](0, 0), temp_faces_global[i][0](1, 0), temp_faces_global[i][0](2, 0));
-				const Eigen::Vector3d v2(temp_faces_global[i][1](0, 0), temp_faces_global[i][1](1, 0), temp_faces_global[i][1](2, 0));
-				const Eigen::Vector3d v3(temp_faces_global[i][2](0, 0), temp_faces_global[i][2](1, 0), temp_faces_global[i][2](2, 0));
-				Eigen::Vector3d n = (v2 - v1).cross(v3 - v1);
-				n.normalize();
-				normals_global[i] = n;
-			}
 		}
 
 		// 计算：刀尖在第 i 面采样点、方向 ori 时，碰撞到的最大 patch_index
@@ -4146,17 +4210,6 @@ std::vector<std::vector<int>> HybridManufacturing::EvaluateMergedPatchToolCollis
 			// 无碰撞记为 -1；有碰撞则赋值为patch index + 1
 			if (!has_collision) {
 				min_collision_patch_matrix[i][ori] = -1;
-				if (is_local) {
-					for (int ii = 0; ii < global_face_count; ++ii) {
-						if (CheckToolCollisionWithCell(center_point, temp_faces_global[ii], max_z_of_faces_global[ii], cutting_tool, 30.0, 3.0)) {
-							has_collision = true;
-							break;
-						}
-					}
-					if (has_collision) {
-						min_collision_patch_matrix[i][ori] = 100;
-					}
-				}
 			}
 			else {
 				min_collision_patch_matrix[i][ori] = max_patch_idx + 1;
@@ -4389,7 +4442,8 @@ Slicer_2 HybridManufacturing::MergeBlockPatchesWithDedup(
 
 	for (int patch_index = 1; patch_index <= max_patch_index; ++patch_index) {
 		Slicer_2 patch;
-		const std::string patch_file = VisPath("block_patch-" + to_string(patch_index) + "_0.obj");
+		const std::string patch_file = PatchVisPath(
+			"block_patch-" + to_string(patch_index) + "_0.obj");
 
 		if (!patch.load(patch_file)) {
 			std::cout << "[Warn] cannot load patch file: " << patch_file << std::endl;
@@ -4478,7 +4532,8 @@ void HybridManufacturing::CutMesh(
 	bool& jud_error,
 	int id_node,
 	int id_continue,
-	vector<int> flag_cut_layers_is_hole)
+	vector<int> flag_cut_layers_is_hole,
+	const vector<bool>& judge_S_be_searched)
 {
 	std::cout << "[HybridManufacturing::CutMesh] height_of_beam_search: " << height_of_beam_search
 		<< " cont_number_of_queue: " << cont_number_of_queue
@@ -4809,6 +4864,17 @@ void HybridManufacturing::CutMesh(
 		<< "seed_faces=" << seed_remove_face_ids.size()
 		<< ", removed_faces=" << remove_triangles.size()
 		<< std::endl;
+	if (remove_triangles.size() >= all_slicer.triangles.size()) {
+		std::cerr << "[HybridManufacturing::CutMesh] Reject cut because removal selection consumed the entire mesh: "
+			<< "node=" << id_node
+			<< ", removed_faces=" << remove_triangles.size()
+			<< ", total_faces=" << all_slicer.triangles.size()
+			<< std::endl;
+		jud_error = true;
+		current_remove_triangles.clear();
+		current_slicer.clear();
+		return;
+	}
 
 	vasco::Slicer temp_slicer_1;
 	temp_slicer_1.clear();
@@ -4962,6 +5028,17 @@ void HybridManufacturing::CutMesh(
 			jud_triangle_have_been_added[face_id] = true;
 		}
 	}
+	if (remove_triangles.size() >= all_slicer.triangles.size()) {
+		std::cerr << "[HybridManufacturing::CutMesh] Reject cut because removal plus residual cleanup consumed the entire mesh: "
+			<< "node=" << id_node
+			<< ", removed_faces=" << remove_triangles.size()
+			<< ", total_faces=" << all_slicer.triangles.size()
+			<< std::endl;
+		jud_error = true;
+		current_remove_triangles.clear();
+		current_slicer.clear();
+		return;
+	}
 	//////////////////////////////////////////////////////////////////
 
 
@@ -4976,24 +5053,47 @@ void HybridManufacturing::CutMesh(
 	RotateSlicerPositions(slicer, vector_after, vectorBefore);
 	current_slicer = slicer;
 
-	//从all_slicer中移除remove_triangles
-	//cout << current_remove_triangles.size() << endl;
-	//if (height_of_beam_search != 2 || id_continue != 1)
-	for (int i = 0; i < remove_triangles.size(); i++) {
-		for (int j = 0; j < all_slicer.triangles.size(); ) {
-			if (remove_triangles[i][0] == all_slicer.triangles[j][0] && remove_triangles[i][1] == all_slicer.triangles[j][1] && remove_triangles[i][2] == all_slicer.triangles[j][2]) {
-				all_slicer.triangles.erase(all_slicer.triangles.begin() + j);
-				break;
-			}
-			j++;
-		}
-	}	//潜在问题？：如果顶点顺序不同（例如顺时针/逆时针），将无法删除；可改为排序比较或集合比较。
-	//这个潜在问题应该不会出现，因为计算remove_triangles时，是直接从all_slicer.triangles中取出的三角形，三角形顶点顺序没有改变。
-
-
 	size_t face_cnt = Normals.rows();
 	std::cout << "face_cnt " << face_cnt << std::endl;
 	current_remove_triangles = FilterSurfaceRemoveTriangles(slicer, remove_triangles);
+	const auto unresolved_area_s_hits = FindUnresolvedAreaSOnRemovedSurface(
+		current_slicer,
+		current_remove_triangles,
+		V,
+		map_S_and_vertex,
+		judge_S_be_searched);
+	if (!unresolved_area_s_hits.empty()) {
+		std::cerr << "[HybridManufacturing::CutMesh] Reject cut because the removed surface contains unresolved subtractive-inaccessible vertices: "
+			<< "node=" << id_node
+			<< ", hit_count=" << unresolved_area_s_hits.size()
+			<< std::endl;
+		const std::size_t report_count = std::min<std::size_t>(unresolved_area_s_hits.size(), 20);
+		for (std::size_t hit_index = 0; hit_index < report_count; ++hit_index) {
+			const int s_id = unresolved_area_s_hits[hit_index].first;
+			const int vertex_id = unresolved_area_s_hits[hit_index].second;
+			std::cerr << "  area_S=" << s_id
+				<< ", vertex=" << vertex_id
+				<< ", point=(" << V(vertex_id, 0)
+				<< ", " << V(vertex_id, 1)
+				<< ", " << V(vertex_id, 2) << ")"
+				<< std::endl;
+		}
+		jud_error = true;
+		current_remove_triangles.clear();
+		current_slicer.clear();
+		return;
+	}
+
+	// Rebuild the remaining face list in one pass. The selection mask is
+	// indexed exactly like all_slicer.triangles, so no triangle search is needed.
+	std::vector<TRiangle> remaining_triangles;
+	remaining_triangles.reserve(all_slicer.triangles.size() - remove_triangles.size());
+	for (int face_id = 0; face_id < static_cast<int>(all_slicer.triangles.size()); ++face_id) {
+		if (!jud_triangle_have_been_added[face_id]) {
+			remaining_triangles.push_back(all_slicer.triangles[face_id]);
+		}
+	}
+	all_slicer.triangles.swap(remaining_triangles);
 
 	//add cutting plane triangles
 	/*all_slicer.triangles.insert(all_slicer.triangles.begin(),cutting_plane_points)
@@ -5484,7 +5584,7 @@ int HybridManufacturing::subtractive_accessibility_decomposition(
 	Slicer_2 current_slicer)
 {
 	cutting_tool.cylinder_r = 1.5;
-	cutting_tool.cylinder_height = 27;
+	cutting_tool.cylinder_height = 28;
 	cutting_tool.ball_r = 1.5;
 	cutting_tool.carriage_r = 23;
 	cutting_tool.carriage_height = 33;
@@ -5719,7 +5819,7 @@ int HybridManufacturing::subtractive_accessibility_decomposition(
 			}
 
 	//cout << "normal:" << result[0]<<endl;
-	ofstream ofile(VisPath("normal_of_pathches.txt"));
+	ofstream ofile(PatchVisPath("normal_of_pathches.txt"));
 	vector<vector<vasco::core::Tri3>> vis_triangles(1);
 	vector<vasco::core::Vec3> vis_positions = slicer.positions;
 
@@ -5789,7 +5889,11 @@ int HybridManufacturing::subtractive_accessibility_decomposition(
 	}
 	all_balls.close();*/
 	for (int t = 0; t < vis_lines.size(); t++) {
-		std::ofstream dstream(VisPath("patch-" + to_string(height_of_beam_search) + "_" + to_string(cont_number_of_queue) + "_" + to_string(t) + ".stl"));
+		std::ofstream dstream(PatchVisPath(
+			"patch-" + to_string(height_of_beam_search)
+			+ "_" + to_string(cont_number_of_queue)
+			+ "_" + to_string(t)
+			+ ".stl"));
 		if (!dstream.is_open()) {
 			std::cout << "can not open " << std::endl;
 			return static_cast<int>(vis_lines.size());
@@ -5818,9 +5922,16 @@ int HybridManufacturing::subtractive_accessibility_decomposition(
 	cout << cont_patch << endl;
 	vector<vector<double>> colors(vis_lines.size(), vector<double>(3));
 	Visual vis;
-	vis.generateModelForRendering_10(vis_lines, colors, VisPath("coral_subtractive_patch_voronoi_cell.obj"));
+	vis.generateModelForRendering_10(
+		vis_lines,
+		colors,
+		PatchVisPath("coral_subtractive_patch_voronoi_cell.obj"));
 	Visual vis_2;
-	vis_2.generateModelForRendering_11(points_in_cell, normals, colors, VisPath("coral_subtractive_patch_normal.obj"));
+	vis_2.generateModelForRendering_11(
+		points_in_cell,
+		normals,
+		colors,
+		PatchVisPath("coral_subtractive_patch_normal.obj"));
 	//Visual vis;
 	//vis.generateModelForRendering_7(sampling_subtractive.sample_points[ori], ".\\vis\\coral_accessible_points_in_ori-" + to_string(ori) + "_orientation.obj");
 	//////////////////////////////////////////////////////////////////////////////////
@@ -5831,9 +5942,61 @@ int HybridManufacturing::subtractive_accessibility_decomposition(
 
 void HybridManufacturing::subtractive_accessibility_decomposition_global(int height_of_beam_search, cutter cutting_tool)
 {
+	RunSubtractiveAccessibilityDecompositionGlobal(
+		height_of_beam_search,
+		cutting_tool,
+		false,
+		0,
+		0,
+		1);
+}
+
+void HybridManufacturing::subtractive_accessibility_decomposition_local_initialized_global(
+	int height_of_beam_search,
+	cutter cutting_tool)
+{
+	RunSubtractiveAccessibilityDecompositionGlobal(
+		height_of_beam_search,
+		cutting_tool,
+		true,
+		0,
+		0,
+		1);
+}
+
+void HybridManufacturing::subtractive_accessibility_decomposition_random_multistart_global(
+	int height_of_beam_search,
+	cutter cutting_tool,
+	int restart_count,
+	unsigned int random_seed,
+	int thread_count)
+{
+	RunSubtractiveAccessibilityDecompositionGlobal(
+		height_of_beam_search,
+		cutting_tool,
+		false,
+		std::max(1, restart_count),
+		random_seed,
+		thread_count);
+}
+
+void HybridManufacturing::RunSubtractiveAccessibilityDecompositionGlobal(
+	int height_of_beam_search,
+	cutter cutting_tool,
+	bool initialize_with_local_labels,
+	int random_restart_count,
+	unsigned int random_seed,
+	int random_thread_count)
+{
+	ResetPolyscopeSceneForGlobalDecomposition();
+	const bool use_random_multistart = random_restart_count > 0;
+	const std::string output_prefix = initialize_with_local_labels
+		? "local_initialized_global_"
+		: (use_random_multistart ? "random_multistart_global_" : "");
+
 	sampling_subtractive.OrientationSamplePoints();	//sampling_subtractive生成球面采样点
 	cutting_tool.cylinder_r = 1.5;
-	cutting_tool.cylinder_height = 27;
+	cutting_tool.cylinder_height = 28;
 	cutting_tool.ball_r = 1.5;
 	cutting_tool.carriage_r = 23;
 	cutting_tool.carriage_height = 33;
@@ -5848,9 +6011,15 @@ void HybridManufacturing::subtractive_accessibility_decomposition_global(int hei
 	Slicer_2 slicer_load_next_patch;
 
 	const std::string ancestor_source_report_file =
-		VisPath("beam_search_last_layer_ancestor_sources_" + MakeAccessibilityDebugFileToken(file_name) + ".txt");
+		AncestorSourceVisPath(
+			"beam_search_last_layer_ancestor_sources_"
+			+ MakeAccessibilityDebugFileToken(file_name)
+			+ ".txt");
 	const std::vector<std::string> ancestor_patch_files =
-		LoadFirstFinalNodeAncestorPatchFiles(ancestor_source_report_file, file_name, VisDir());
+		LoadFirstFinalNodeAncestorPatchFiles(
+			ancestor_source_report_file,
+			file_name,
+			PatchVisDir());
 	const int graph_cut_block_count = ancestor_patch_files.empty()
 		? height_of_beam_search
 		: static_cast<int>(ancestor_patch_files.size());
@@ -5885,11 +6054,12 @@ void HybridManufacturing::subtractive_accessibility_decomposition_global(int hei
 		"global")) {
 		return;
 	}
-	slicer_load_merged_patch.save(VisPath("block_patch_merged_removedup.obj"));
+	slicer_load_merged_patch.save(
+		PatchVisPath(output_prefix + "block_patch_merged_removedup.obj"));
 	std::cout << "[Info] merged patch mesh: V=" << slicer_load_merged_patch.positions.size()
 		<< ", F=" << slicer_load_merged_patch.triangles.size() << std::endl;
 
-	// 计算 merged patch 上每个三角面在每个采样方向下的最大碰撞 patch_index
+	// 计算 merged patch 上每个三角面在每个采样方向下的最大碰撞 patch_index，以此得到可行patch_index的区间
 	const auto merged_face_min_collision_patch = EvaluateMergedPatchToolCollision(
 		slicer_load_merged_patch,
 		merged_face_source_patch_id,
@@ -5926,7 +6096,7 @@ void HybridManufacturing::subtractive_accessibility_decomposition_global(int hei
 			std::vector<std::vector<int>> data_value(face_count, std::vector<int>(num_labels, INF_COST));
 
 			int warn_a_lt_b = 0;
-			int warn_no_feasible = 0;
+			int fallback_all_orientation_face_count = 0;
 
 			for (int i = 0; i < face_count; ++i) {
 				int b = 1;
@@ -5961,68 +6131,191 @@ void HybridManufacturing::subtractive_accessibility_decomposition_global(int hei
 					}
 				}
 
-				// 防御：若该面没有任何可行label，给一个保底label避免graph cut退化
+				// 若碰撞约束没有产生可行 label，则固定为该面的来源 block，
+				// 并开放其全部方向，让邻接和平滑项选择最终 orientation。
 				if (feasible_cnt == 0) {
-					++warn_no_feasible;
-					data_value[i][encode_label(b, 30)] = 0;
+					++fallback_all_orientation_face_count;
+					if (!EnableAllOrientationLabelsForSourceBlock(data_value[i], b, ori_count)) {
+						std::cerr << "[Error] failed to enable source-block orientation labels: face="
+							<< i << ", source_block=" << b << std::endl;
+						return;
+					}
 				}
 			}
 
 			if (warn_a_lt_b > 0) {
-				std::cout << "[Warn] graph-cut label range invalid (a<b) count = " << warn_a_lt_b << std::endl;
+				std::cout << "[Warn] graph-cut label range invalid (a>b) count = " << warn_a_lt_b << std::endl;
 			}
-			if (warn_no_feasible > 0) {
-				std::cout << "[Warn] faces with no feasible label = " << warn_no_feasible
-					<< " (fallback label assigned)." << std::endl;
+			if (fallback_all_orientation_face_count > 0) {
+				std::cout << "[Warn] faces with no collision-derived feasible label = "
+					<< fallback_all_orientation_face_count
+					<< " (all orientations of each face's source block enabled)." << std::endl;
 			}
 
-			// 建立面邻接图（共享边）
-			std::vector<std::vector<int>> pixels_relations;
-			std::vector<int> length_edges;
-
-			std::map<std::pair<int, int>, int> edge_owner; // edge -> face id
-			edge_owner.clear();
-
-			for (int i = 0; i < face_count; ++i) {
-				const auto& tri = slicer_load_merged_patch.triangles[i];
-				for (int e = 0; e < 3; ++e) {
-					int u = tri[e];
-					int v = tri[(e + 1) % 3];
-					if (u > v) std::swap(u, v);
-
-					const std::pair<int, int> key(u, v);
-					auto it = edge_owner.find(key);
-					if (it == edge_owner.end()) {
-						edge_owner.insert({ key, i });
-					}
-					else {
-						const int j = it->second;
-						if (j != i) {
-							pixels_relations.push_back({ j, i });
-
-							const auto& p1 = slicer_load_merged_patch.positions[u];
-							const auto& p2 = slicer_load_merged_patch.positions[v];
-							const int w = std::max(1, static_cast<int>(distanceVec3(p1, p2) * 100.0));
-							length_edges.push_back(w);
-						}
-					}
-				}
+			MergedPatchGraphCutAdjacency graph_adjacency;
+			if (!BuildMergedPatchGraphCutAdjacency(
+				slicer_load_merged_patch,
+				merged_face_source_patch_id,
+				graph_cut_block_boundary_overlap_cost_per_unit,
+				graph_adjacency)) {
+				std::cerr << "[GraphCut] Skip global decomposition because merged-patch "
+					<< "adjacency construction failed." << std::endl;
+				return;
 			}
+			const auto& pixels_relations = graph_adjacency.face_relations;
+			const auto& length_edges = graph_adjacency.edge_weights_times_ten;
 
 			std::cout << "[Info] graph-cut nodes=" << face_count
 				<< ", labels=" << num_labels
 				<< ", edges=" << pixels_relations.size() << std::endl;
 
-			// graph cut
-			std::vector<int> result_labels = GeneralGraph_DArraySArraySpatVarying(
-				face_count,
-				num_labels,
-				data_value,
-				pixels_relations,
-				length_edges);
+			std::vector<int> local_initial_labels;
+			if (initialize_with_local_labels) {
+				// Temporarily reduce each global feasible interval [a, b] to the
+				// local greedy choice {a}. Restoring these entries to zero below
+				// recovers the exact global data costs without another collision pass.
+				for (int face_id = 0; face_id < face_count; ++face_id) {
+					int source_block = 1;
+					if (face_id < static_cast<int>(merged_face_source_patch_id.size())) {
+						source_block = merged_face_source_patch_id[face_id];
+					}
+					source_block = std::max(1, std::min(block_count, source_block));
+
+					for (int orientation_id = 0; orientation_id < ori_count; ++orientation_id) {
+						int first_feasible_block =
+							merged_face_min_collision_patch[face_id][orientation_id];
+						if (first_feasible_block == -1) {
+							first_feasible_block = 1;
+						}
+						first_feasible_block =
+							std::max(1, std::min(first_feasible_block, block_count + 1));
+						if (first_feasible_block > source_block) {
+							continue;
+						}
+
+						for (int patch_id = first_feasible_block + 1;
+							patch_id <= source_block;
+							++patch_id) {
+							data_value[face_id][encode_label(patch_id, orientation_id)] = INF_COST;
+						}
+					}
+				}
+
+				std::cout << "[GraphCut] Stage 1/2: solve local greedy labeling." << std::endl;
+				local_initial_labels = GeneralGraph_DArraySArraySpatVarying(
+					face_count,
+					num_labels,
+					data_value,
+					pixels_relations,
+					length_edges);
+				auto local_label_types = local_initial_labels;
+				std::sort(local_label_types.begin(), local_label_types.end());
+				const int local_label_count = static_cast<int>(
+					std::unique(local_label_types.begin(), local_label_types.end())
+					- local_label_types.begin());
+				std::cout << "[GraphCut] Local initialization uses "
+					<< local_label_count << " labels." << std::endl;
+
+				for (int face_id = 0; face_id < face_count; ++face_id) {
+					int source_block = 1;
+					if (face_id < static_cast<int>(merged_face_source_patch_id.size())) {
+						source_block = merged_face_source_patch_id[face_id];
+					}
+					source_block = std::max(1, std::min(block_count, source_block));
+
+					for (int orientation_id = 0; orientation_id < ori_count; ++orientation_id) {
+						int first_feasible_block =
+							merged_face_min_collision_patch[face_id][orientation_id];
+						if (first_feasible_block == -1) {
+							first_feasible_block = 1;
+						}
+						first_feasible_block =
+							std::max(1, std::min(first_feasible_block, block_count + 1));
+						if (first_feasible_block > source_block) {
+							continue;
+						}
+
+						for (int patch_id = first_feasible_block + 1;
+							patch_id <= source_block;
+							++patch_id) {
+							data_value[face_id][encode_label(patch_id, orientation_id)] = 0;
+						}
+					}
+				}
+			}
+
+			std::vector<int> result_labels;
+			if (initialize_with_local_labels) {
+				std::cout << "[GraphCut] Stage 2/2: solve global labeling from the local result."
+					<< std::endl;
+				const auto initialized_result = RunGeneralGraphCutWithInitialLabels(
+					face_count,
+					num_labels,
+					data_value,
+					pixels_relations,
+					length_edges,
+					local_initial_labels,
+					"local result");
+				result_labels = initialized_result.labels;
+			}
+			else if (use_random_multistart) {
+				const InitializedGraphCutResult multistart_result =
+					RunRandomFeasibleLabelGraphCutRestarts(
+						face_count,
+						num_labels,
+						data_value,
+						pixels_relations,
+						length_edges,
+						random_restart_count,
+						random_seed,
+						random_thread_count,
+						"global",
+						PatchVisPath(
+							"random_multistart_global_graphcut_runs.csv"));
+				if (multistart_result.succeeded) {
+					result_labels = multistart_result.labels;
+				}
+				else {
+					std::cerr << "[GraphCut] All random restarts failed; use the default global initialization."
+						<< std::endl;
+					result_labels = GeneralGraph_DArraySArraySpatVarying(
+						face_count,
+						num_labels,
+						data_value,
+						pixels_relations,
+						length_edges);
+				}
+			}
+			else {
+				result_labels = GeneralGraph_DArraySArraySpatVarying(
+					face_count,
+					num_labels,
+					data_value,
+					pixels_relations,
+					length_edges);
+			}
+			auto final_label_types = result_labels;
+			std::sort(final_label_types.begin(), final_label_types.end());
+			const int final_label_count = static_cast<int>(
+				std::unique(final_label_types.begin(), final_label_types.end())
+				- final_label_types.begin());
+			std::cout << "[GraphCut] Final "
+				<< (initialize_with_local_labels
+					? "local-initialized global"
+					: (use_random_multistart ? "random-multistart global" : "global"))
+				<< " result uses " << final_label_count << " labels." << std::endl;
+			WriteMergedPatchGraphCutEdgeCostReport(
+				PatchVisPath(
+					output_prefix + "merged_patch_graphcut_edge_costs.csv"),
+				PatchVisPath(
+					output_prefix
+					+ "merged_patch_graphcut_boundary_overlap_summary.txt"),
+				graph_adjacency,
+				result_labels);
 
 			// 可视化：按最终label所属patch着色（离散固定色）
-			const std::string gc_obj_file = VisPath("merged_patch_graphcut_label.obj");
+			const std::string gc_obj_file =
+				PatchVisPath(output_prefix + "merged_patch_graphcut_label.obj");
 			std::ofstream ofs(gc_obj_file);
 			if (!ofs.is_open()) {
 				std::cout << "[Warn] cannot open file for writing: " << gc_obj_file << std::endl;
@@ -6050,7 +6343,8 @@ void HybridManufacturing::subtractive_accessibility_decomposition_global(int hei
 					};
 
 				// 同时输出 face -> (patch,ori)
-				const std::string gc_label_file = VisPath("merged_patch_graphcut_label.txt");
+				const std::string gc_label_file =
+					PatchVisPath(output_prefix + "merged_patch_graphcut_label.txt");
 				std::ofstream lfs(gc_label_file);
 				lfs << "face_id patch_id ori_id label_id\n";
 
@@ -6121,7 +6415,10 @@ void HybridManufacturing::subtractive_accessibility_decomposition_global(int hei
 					}
 
 					const std::string patch_obj_file =
-						VisPath("merged_patch_graphcut_patch_id_" + std::to_string(patch_id) + ".obj");
+						PatchVisPath(
+							output_prefix + "merged_patch_graphcut_patch_id_"
+							+ std::to_string(patch_id)
+							+ ".obj");
 					std::ofstream pofs(patch_obj_file);
 					if (!pofs.is_open()) {
 						std::cout << "[Warn] cannot open file for writing: " << patch_obj_file << std::endl;
@@ -6153,7 +6450,7 @@ void HybridManufacturing::subtractive_accessibility_decomposition_global(int hei
 					}
 
 					const std::string patch_ori_obj_file =
-						VisPath("merged_patch_graphcut_patch_id_" + std::to_string(patch_id)
+						PatchVisPath(output_prefix + "merged_patch_graphcut_patch_id_" + std::to_string(patch_id)
 							+ "_ori_id_" + std::to_string(ori_id) + ".obj");
 					std::ofstream pofs(patch_ori_obj_file);
 					if (!pofs.is_open()) {
@@ -6186,7 +6483,7 @@ void HybridManufacturing::subtractive_accessibility_decomposition_global(int hei
 					}
 
 					const std::string tool_dir_file =
-						VisPath("merged_patch_graphcut_patch_id_" + std::to_string(patch_id)
+						PatchVisPath(output_prefix + "merged_patch_graphcut_patch_id_" + std::to_string(patch_id)
 							+ "_ori_id_" + std::to_string(ori_id) + ".txt");
 					std::ofstream tdfs(tool_dir_file);
 					if (!tdfs.is_open()) {
@@ -6225,7 +6522,7 @@ void HybridManufacturing::subtractive_accessibility_decomposition_global(int hei
 					int ori_id = 0;
 					decode_label(patch_id, de_patch, ori_id);
 					const std::string mesh_name =
-						"merged_patch_graphcut_patch_" + std::to_string(height_of_beam_search) + "_" + std::to_string(de_patch) + "_" + std::to_string(ori_id);
+						output_prefix + "merged_patch_graphcut_patch_" + std::to_string(height_of_beam_search) + "_" + std::to_string(de_patch) + "_" + std::to_string(ori_id);
 
 					auto* ps_mesh = polyscope::registerSurfaceMesh(
 						mesh_name,
@@ -6277,7 +6574,7 @@ void HybridManufacturing::subtractive_accessibility_decomposition_global(int hei
 						patch_arrow_colors.push_back({ c[0], c[1], c[2] });
 
 						const std::string arrow_name =
-							"merged_patch_graphcut_arrow_" + std::to_string(height_of_beam_search) + "_" + std::to_string(de_patch) + "_" + std::to_string(ori_id);
+							output_prefix + "merged_patch_graphcut_arrow_" + std::to_string(height_of_beam_search) + "_" + std::to_string(de_patch) + "_" + std::to_string(ori_id);
 
 						Eigen::Vector3d ref_axis = (std::abs(ori_vec.z()) < 0.9)
 							? Eigen::Vector3d(0.0, 0.0, 1.0)
@@ -6328,7 +6625,7 @@ void HybridManufacturing::subtractive_accessibility_decomposition_global(int hei
 						patch_arrow_points,
 						patch_arrow_dirs,
 						patch_arrow_colors,
-						VisPath("merged_patch_graphcut_patch_ori_arrows.obj"));
+						PatchVisPath(output_prefix + "merged_patch_graphcut_patch_ori_arrows.obj"));
 				}
 				polyscope::show();
 
@@ -6342,11 +6639,43 @@ void HybridManufacturing::subtractive_accessibility_decomposition_global(int hei
 
 int HybridManufacturing::subtractive_accessibility_decomposition_local(int height_of_beam_search, cutter cutting_tool)
 {
-	if (sampling_subtractive.sample_points.empty()) {
-		sampling_subtractive.OrientationSamplePoints();	//sampling_subtractive生成球面采样点
-	}
+	return RunSubtractiveAccessibilityDecompositionLocal(
+		height_of_beam_search,
+		cutting_tool,
+		0,
+		0,
+		1);
+}
+
+int HybridManufacturing::subtractive_accessibility_decomposition_random_multistart_local(
+	int height_of_beam_search,
+	cutter cutting_tool,
+	int restart_count,
+	unsigned int random_seed,
+	int thread_count)
+{
+	return RunSubtractiveAccessibilityDecompositionLocal(
+		height_of_beam_search,
+		cutting_tool,
+		std::max(1, restart_count),
+		random_seed,
+		thread_count);
+}
+
+int HybridManufacturing::RunSubtractiveAccessibilityDecompositionLocal(
+	int height_of_beam_search,
+	cutter cutting_tool,
+	int random_restart_count,
+	unsigned int random_seed,
+	int random_thread_count)
+{
+	const bool use_random_multistart = random_restart_count > 0;
+	const std::string output_prefix =
+		use_random_multistart ? "random_multistart_local_" : "";
+
+	sampling_subtractive.OrientationSamplePoints();	//sampling_subtractive生成球面采样点
 	cutting_tool.cylinder_r = 1.5;
-	cutting_tool.cylinder_height = 27;
+	cutting_tool.cylinder_height = 28;
 	cutting_tool.ball_r = 1.5;
 	cutting_tool.carriage_r = 23;
 	cutting_tool.carriage_height = 33;
@@ -6360,22 +6689,55 @@ int HybridManufacturing::subtractive_accessibility_decomposition_local(int heigh
 
 	Slicer_2 slicer_load_next_patch;
 
-	// 读取并拼接 .\vis\block_patch-1_.obj ~ .\vis\block_patch-height_of_beam_search_.obj
+	const std::string ancestor_source_report_file =
+		AncestorSourceVisPath(
+			"beam_search_last_layer_ancestor_sources_"
+			+ MakeAccessibilityDebugFileToken(file_name)
+			+ ".txt");
+	const std::vector<std::string> ancestor_patch_files =
+		LoadFirstFinalNodeAncestorPatchFiles(
+			ancestor_source_report_file,
+			file_name,
+			PatchVisDir());
+	const int graph_cut_block_count = ancestor_patch_files.empty()
+		? height_of_beam_search
+		: static_cast<int>(ancestor_patch_files.size());
+
+	if (!ancestor_patch_files.empty()) {
+		std::cout << "[Info] local decomposition uses ancestor patches from first final node in "
+			<< ancestor_source_report_file << std::endl;
+		for (int i = 0; i < static_cast<int>(ancestor_patch_files.size()); ++i) {
+			std::cout << "  ancestor_patch[" << (i + 1) << "]: "
+				<< ancestor_patch_files[i] << std::endl;
+		}
+	}
+
+	// 与 global 使用同一条祖先 patch 链；报告不存在时使用相同的旧格式回退。
 	std::vector<int> merged_vertex_source_patch_id;
 	std::vector<int> merged_face_source_patch_id;
 
-	Slicer_2 slicer_load_merged_patch = MergeBlockPatchesWithDedup(
-		height_of_beam_search,
-		merged_vertex_source_patch_id,
-		merged_face_source_patch_id,
-		1e-5);
+	Slicer_2 slicer_load_merged_patch = ancestor_patch_files.empty()
+		? MergeBlockPatchesWithDedup(
+			height_of_beam_search,
+			merged_vertex_source_patch_id,
+			merged_face_source_patch_id,
+			1e-3)
+		: MergeBlockPatchesWithDedup(
+			ancestor_patch_files,
+			merged_vertex_source_patch_id,
+			merged_face_source_patch_id,
+			1e-3);
 	if (!StitchMergedPatchBoundariesForGraphCut(
 		slicer_load_merged_patch,
 		merged_face_source_patch_id,
-		"local")) {
+		use_random_multistart ? "random-multistart local" : "local")) {
 		return 999;
 	}
-	slicer_load_merged_patch.save(VisPath("block_patch_merged_removedup_local.obj"));
+	slicer_load_merged_patch.save(
+		PatchVisPath(
+			use_random_multistart
+			? "random_multistart_local_block_patch_merged_removedup.obj"
+			: "block_patch_merged_removedup_local.obj"));
 	std::cout << "[Info] merged patch mesh: V=" << slicer_load_merged_patch.positions.size()
 		<< ", F=" << slicer_load_merged_patch.triangles.size() << std::endl;
 
@@ -6383,8 +6745,7 @@ int HybridManufacturing::subtractive_accessibility_decomposition_local(int heigh
 	const auto merged_face_min_collision_patch = EvaluateMergedPatchToolCollision(
 		slicer_load_merged_patch,
 		merged_face_source_patch_id,
-		cutting_tool,
-		true);
+		cutting_tool);
 
 	std::cout << "[Info] merged-face min-collision-patch matrix computed: faces="
 		<< merged_face_min_collision_patch.size() << ", orientations="
@@ -6395,7 +6756,7 @@ int HybridManufacturing::subtractive_accessibility_decomposition_local(int heigh
 	{
 		const int face_count = static_cast<int>(slicer_load_merged_patch.triangles.size());
 		const int ori_count = static_cast<int>(sampling_subtractive.sample_points.size());
-		const int block_count = height_of_beam_search;
+		const int block_count = graph_cut_block_count;
 		const int num_labels = block_count * ori_count;
 		const int INF_COST = 10000000;
 
@@ -6409,16 +6770,11 @@ int HybridManufacturing::subtractive_accessibility_decomposition_local(int heigh
 				return (patch_id - 1) * ori_count + ori_id;
 				};
 
-			auto decode_label = [ori_count](int label_id, int& patch_id, int& ori_id) {
-				patch_id = label_id / ori_count + 1;
-				ori_id = label_id % ori_count;
-				};
-
 			// data cost: face x label
 			std::vector<std::vector<int>> data_value(face_count, std::vector<int>(num_labels, INF_COST));
 
 			int warn_a_lt_b = 0;
-			int warn_no_feasible = 0;
+			int fallback_all_orientation_face_count = 0;
 
 			for (int i = 0; i < face_count; ++i) {
 				int b = 1;
@@ -6438,85 +6794,121 @@ int HybridManufacturing::subtractive_accessibility_decomposition_local(int heigh
 						a = 1;
 					}
 
-					a = std::max(1, std::min(a, block_count));
+					a = std::max(1, std::min(a, block_count + 1));
 
-					// 按 [a..b] 添加标签，若 a>b 不添加并提示
+					// Patch 编号按 beam-search 切除顺序递增，而实际制造时按相反顺序恢复 block。
+					// 因此在可行区间 [a, b] 中只开放 a，表示尽量推迟该面在实际制造流程中的减材时刻。
 					if (a > b) {
 						++warn_a_lt_b;
 						continue;
 					}
 
-					for (int p = a; p <= b; ++p) {
+					for (int p = a; p <= a; ++p) {
 						const int lid = encode_label(p, ori);
 						data_value[i][lid] = 0;
 						++feasible_cnt;
 					}
 				}
 
-				// 防御：若该面没有任何可行label，给一个保底label避免graph cut退化
+				// 若碰撞约束没有产生可行 label，则固定为该面的来源 block，
+				// 并开放其全部方向，让邻接和平滑项选择最终 orientation。
 				if (feasible_cnt == 0) {
-					++warn_no_feasible;
-					data_value[i][encode_label(b, 30)] = 0;
+					++fallback_all_orientation_face_count;
+					if (!EnableAllOrientationLabelsForSourceBlock(data_value[i], b, ori_count)) {
+						std::cerr << "[Error] failed to enable source-block orientation labels: face="
+							<< i << ", source_block=" << b << std::endl;
+						return 999;
+					}
 				}
 			}
 
 			if (warn_a_lt_b > 0) {
-				std::cout << "[Warn] graph-cut label range invalid (a<b) count = " << warn_a_lt_b << std::endl;
+				std::cout << "[Warn] graph-cut label range invalid (a>b) count = " << warn_a_lt_b << std::endl;
 			}
-			if (warn_no_feasible > 0) {
-				std::cout << "[Warn] faces with no feasible label = " << warn_no_feasible
-					<< " (fallback label assigned)." << std::endl;
+			if (fallback_all_orientation_face_count > 0) {
+				std::cout << "[Warn] faces with no collision-derived feasible label = "
+					<< fallback_all_orientation_face_count
+					<< " (all orientations of each face's source block enabled)." << std::endl;
 			}
 
-			// 建立面邻接图（共享边）
-			std::vector<std::vector<int>> pixels_relations;
-			std::vector<int> length_edges;
-
-			std::map<std::pair<int, int>, int> edge_owner; // edge -> face id
-			edge_owner.clear();
-
-			for (int i = 0; i < face_count; ++i) {
-				const auto& tri = slicer_load_merged_patch.triangles[i];
-				for (int e = 0; e < 3; ++e) {
-					int u = tri[e];
-					int v = tri[(e + 1) % 3];
-					if (u > v) std::swap(u, v);
-
-					const std::pair<int, int> key(u, v);
-					auto it = edge_owner.find(key);
-					if (it == edge_owner.end()) {
-						edge_owner.insert({ key, i });
-					}
-					else {
-						const int j = it->second;
-						if (j != i) {
-							pixels_relations.push_back({ j, i });
-
-							const auto& p1 = slicer_load_merged_patch.positions[u];
-							const auto& p2 = slicer_load_merged_patch.positions[v];
-							const int w = std::max(1, static_cast<int>(distanceVec3(p1, p2) * 100.0));
-							length_edges.push_back(w);
-						}
-					}
-				}
+			MergedPatchGraphCutAdjacency graph_adjacency;
+			if (!BuildMergedPatchGraphCutAdjacency(
+				slicer_load_merged_patch,
+				merged_face_source_patch_id,
+				graph_cut_block_boundary_overlap_cost_per_unit,
+				graph_adjacency)) {
+				std::cerr << "[GraphCut] Skip local decomposition because merged-patch "
+					<< "adjacency construction failed." << std::endl;
+				return 999;
 			}
+			const auto& pixels_relations = graph_adjacency.face_relations;
+			const auto& length_edges = graph_adjacency.edge_weights_times_ten;
 
 			std::cout << "[Info] graph-cut nodes=" << face_count
 				<< ", labels=" << num_labels
 				<< ", edges=" << pixels_relations.size() << std::endl;
 
 			// graph cut
-			std::vector<int> result_labels = GeneralGraph_DArraySArraySpatVarying(
-				face_count,
-				num_labels,
-				data_value,
-				pixels_relations,
-				length_edges);
+			std::vector<int> result_labels;
+			if (use_random_multistart) {
+				const InitializedGraphCutResult multistart_result =
+					RunRandomFeasibleLabelGraphCutRestarts(
+						face_count,
+						num_labels,
+						data_value,
+						pixels_relations,
+						length_edges,
+						random_restart_count,
+						random_seed,
+						random_thread_count,
+						"local",
+						PatchVisPath(
+							output_prefix + "graphcut_runs.csv"));
+				if (multistart_result.succeeded) {
+					result_labels = multistart_result.labels;
+				}
+				else {
+					std::cerr << "[GraphCut] All local random restarts failed; "
+						<< "use the default local initialization." << std::endl;
+					result_labels = GeneralGraph_DArraySArraySpatVarying(
+						face_count,
+						num_labels,
+						data_value,
+						pixels_relations,
+						length_edges);
+				}
+			}
+			else {
+				result_labels = GeneralGraph_DArraySArraySpatVarying(
+					face_count,
+					num_labels,
+					data_value,
+					pixels_relations,
+					length_edges);
+			}
 
 			auto label_type_count = result_labels;
 			std::sort(label_type_count.begin(), label_type_count.end());
 			ret = std::unique(label_type_count.begin(), label_type_count.end()) - label_type_count.begin();
 
+			const std::string visualization_prefix =
+				use_random_multistart ? output_prefix : "local_";
+			WriteMergedPatchGraphCutEdgeCostReport(
+				PatchVisPath(
+					visualization_prefix + "merged_patch_graphcut_edge_costs.csv"),
+				PatchVisPath(
+					visualization_prefix
+					+ "merged_patch_graphcut_boundary_overlap_summary.txt"),
+				graph_adjacency,
+				result_labels);
+			accessibility_visualization::ShowMergedPatchGraphCutLabels(
+				PatchVisDir(),
+				visualization_prefix,
+				height_of_beam_search,
+				ori_count,
+				slicer_load_merged_patch,
+				result_labels,
+				sampling_subtractive.sample_points);
 		}
 	}
 	return ret;
@@ -6633,7 +7025,7 @@ void HybridManufacturing::EvaluateCandidateNode(
 	int now_last_node,
 	nozzle the_nozzle)
 {
-	printf("\r[%d%%]>", i * 100 / (candidate_nodes.size() - 1));
+	printf("\r[%d%%]>", i * 100 / std::max(1, static_cast<int>(candidate_nodes.size()) - 1));
 	for (int j = 1; j <= i * 20 / candidate_nodes.size(); j++)
 		cout << "▉";
 
@@ -6948,8 +7340,8 @@ void HybridManufacturing::outer_beam_search(nozzle the_nozzle, cutter cutting_to
 			const double accessibility_marker_radius = std::max(0.25, dh * 0.15);
 			const std::string accessibility_node_tag =
 				MakeAccessibilityDebugNodeTag(height_of_beam_search, cont_number_of_queue, now_last_node);
-			WriteSubtractiveAccessibilityDebugVisualizations(
-				VisDir(),
+			accessibility_visualization::WriteSubtractiveAccessibilityDebugVisualizations(
+				UnaccessibleVisDir(),
 				accessibility_node_tag,
 				accessibility_marker_radius,
 				V,
@@ -6959,11 +7351,16 @@ void HybridManufacturing::outer_beam_search(nozzle the_nozzle, cutter cutting_to
 				map_covering_points_and_vertex);
 			if (!sampling_subtractive.sample_points.empty()) {
 				const std::vector<bool> active_original_vertices =
-					BuildActiveOriginalVertexMask(V, Katana::Instance().vertices);
+					accessibility_visualization::BuildActiveOriginalVertexMask(
+						V,
+						Katana::Instance().vertices);
 				int current_selected_s_id = -1;
 				int current_selected_cell_id = -1;
-				WriteHighestZInaccessiblePointAllOrientationToolCollisionObj(
-					VisPath("access_debug_subtractive_current_node_tool_collision" + accessibility_node_tag + ".obj"),
+				accessibility_visualization::WriteHighestZInaccessiblePointAllOrientationToolCollisionObj(
+					UnaccessibleVisPath(
+						"access_debug_subtractive_current_node_tool_collision"
+						+ accessibility_node_tag
+						+ ".obj"),
 					V,
 					all_voronoi_cells,
 					sampling_subtractive.sample_points,
@@ -7002,12 +7399,21 @@ void HybridManufacturing::outer_beam_search(nozzle the_nozzle, cutter cutting_to
 					temp_time_2);
 
 				if (open_vis_additive_accessibility_debug) {
-					WriteAdditiveAccessibilityDebugVisualization(
-						VisDir(),
+					accessibility_visualization::WriteAdditiveAccessibilityDebugVisualization(
+						UnaccessibleVisDir(),
 						layer_graph,
 						accessibility_node_tag,
 						ori,
 						accessibility_marker_radius);
+				}
+				if (open_vis_additive_self_support_debug) {
+					accessibility_visualization::WriteAdditiveRootLayerSelfSupportDebugVisualization(
+						UnaccessibleVisDir(),
+						layer_graph,
+						accessibility_node_tag,
+						ori,
+						vectorAfter,
+						current_node_mesh_rotated);
 				}
 
 				//Layer_Graph layer_graph = BuildAdditiveLayerGraph(
@@ -7060,6 +7466,7 @@ void HybridManufacturing::outer_beam_search(nozzle the_nozzle, cutter cutting_to
 					entry.cut_layers = all_cut_layers[i];
 					entry.cut_layers_dependency_layer = all_cut_layers_dependency_layer[i];
 					entry.fragile_v = fragile_V;
+					entry.judge_s_be_searched = judge_S_be_searched;
 					entry.parent_id = now_last_node;
 					entry.pre_queue_index = cont_number_of_queue;
 					candidate_nodes.push_back(index_node);
@@ -7136,21 +7543,12 @@ void HybridManufacturing::outer_beam_search(nozzle the_nozzle, cutter cutting_to
 			//	for (int i = 0; i < candidate_nodes.size(); i++)
 			//		cout << save_ori[candidate_nodes[i]][0].x() << " " << save_ori[candidate_nodes[i]][0].y() << " " << save_ori[candidate_nodes[i]][0].z() << " " << endl;
 			start_time_7 = clock();
-			while (candidate_nodes.size() != 0 && cont_w < W1 && cont_w < candidate_nodes.size()) {
+			int accepted_candidate_count = 0;
+			const int candidate_attempt_limit = tree_entries[now_last_node].judge_continue
+				? std::min(W1, static_cast<int>(candidate_nodes.size()))
+				: static_cast<int>(candidate_nodes.size());
+			while (cont_w < candidate_attempt_limit && accepted_candidate_count < W1) {
 				const int selected_node = candidate_nodes[cont_w];
-				LogSelectedCandidateMetrics(
-					cont_w,
-					candidate_nodes,
-					now_last_node,
-					save_ori,
-					tree_entries,
-					last_step_nodes,
-					all_calculated_value,
-					pure_value,
-					Sum_candidate_blocks,
-					Sum_connected_components,
-					cont_extra_additive_orientation,
-					evaluation_value);
 				//decompose the model for every node//
 				int index_of_pre_node = tree_entries[selected_node].pre_queue_index;
 				tree_entries[selected_node].source_input_file = make_cut_source_file(
@@ -7195,7 +7593,32 @@ void HybridManufacturing::outer_beam_search(nozzle the_nozzle, cutter cutting_to
 					tree_entries[selected_node].error,
 					selected_node,
 					tree_entries[selected_node].continue_id,
-					flag_cut_layers_is_hole);
+					flag_cut_layers_is_hole,
+					tree_entries[selected_node].judge_s_be_searched);
+
+				if (tree_entries[selected_node].error) {
+					std::cerr << "[BeamSearch] Skip invalid cut candidate: "
+						<< "node=" << selected_node
+						<< ", height=" << height_of_beam_search
+						<< ", queue_index=" << cont_number_of_queue
+						<< std::endl;
+					++cont_w;
+					continue;
+				}
+
+				LogSelectedCandidateMetrics(
+					cont_w,
+					candidate_nodes,
+					now_last_node,
+					save_ori,
+					tree_entries,
+					last_step_nodes,
+					all_calculated_value,
+					pure_value,
+					Sum_candidate_blocks,
+					Sum_connected_components,
+					cont_extra_additive_orientation,
+					evaluation_value);
 
 
 				//if (Tree_nodes_judge_continue[now_last_node] == true) {
@@ -7214,7 +7637,7 @@ void HybridManufacturing::outer_beam_search(nozzle the_nozzle, cutter cutting_to
 				//	//Tree_nodes_continue_id[now_last_node]++;
 				//}
 				cout << "&&&&" << height_of_beam_search << endl;
-				if (tree_entries[candidate_nodes[0]].judge_continue == true) {
+				if (tree_entries[selected_node].judge_continue == true) {
 					cout << "AAAA!" << endl;
 					jud_continue_last_node = true;
 
@@ -7249,12 +7672,16 @@ void HybridManufacturing::outer_beam_search(nozzle the_nozzle, cutter cutting_to
 				if (selected_node >= 0 && selected_node < static_cast<int>(tree_entries.size())) {
 					tree_entries[selected_node].subtractive_accessibility_patch_count = subtractive_accessibility_patch_count;
 					tree_entries[selected_node].patch_output_file =
-						VisPath("block_patch-" + to_string(height_of_beam_search) + "_" + to_string(cont_number_of_queue) + ".obj");
+						PatchVisPath(
+							"block_patch-" + to_string(height_of_beam_search)
+							+ "_" + to_string(cont_number_of_queue)
+							+ ".obj");
 				}
 
 				cont_number_of_queue++;
 				//////////////////////////////////////
 
+				accepted_candidate_count++;
 				cont_w++;
 			}
 			if (!current_selected_nodes.empty()) {
@@ -7275,6 +7702,14 @@ void HybridManufacturing::outer_beam_search(nozzle the_nozzle, cutter cutting_to
 			sum_time_3 = 0;
 			sum_time_4 = 0;
 			sum_time_5 = 0;
+			if (accepted_candidate_count == 0) {
+				std::cout << "[BeamSearch] All attempted candidates at height "
+					<< height_of_beam_search
+					<< " were rejected; no next-layer node was generated. Stop outer beam search."
+					<< std::endl;
+				candidate_nodes.clear();
+				break;
+			}
 			//std::cout << "&&&time&&& a step of beam search: " << double(end_time_2 - start_time_2) / CLOCKS_PER_SEC << std::endl;
 			/*if (height_of_beam_search == 5)
 				W1 = 20;*/
@@ -7337,7 +7772,10 @@ void HybridManufacturing::outer_beam_search(nozzle the_nozzle, cutter cutting_to
 	}
 
 	const std::string ancestor_source_report_file =
-		VisPath("beam_search_last_layer_ancestor_sources_" + MakeAccessibilityDebugFileToken(file_name) + ".txt");
+		AncestorSourceVisPath(
+			"beam_search_last_layer_ancestor_sources_"
+			+ MakeAccessibilityDebugFileToken(file_name)
+			+ ".txt");
 	std::ofstream ancestor_source_report(ancestor_source_report_file);
 	std::ostream& ancestor_out = ancestor_source_report.is_open() ? ancestor_source_report : std::cout;
 	if (!ancestor_source_report.is_open()) {
@@ -7770,7 +8208,7 @@ void HybridManufacturing::DFS_search(Layer_Graph layer_graph, bool& flag_continu
 
 	const double layer_polygon_offset = std::max(1.0, dh * 0.02);
 	const double layer_polygon_repair_eps = std::max(1e-9, layer_polygon_offset * 0.01);
-	const double layer_z_slack = std::max(1e-4, dh * 0.5);
+	const double layer_z_slack = std::max(1e-4, dh * 0.05);
 	vector<vector<Point_2>> vec_points_2d(layer_graph.total_node_num);
 	vector<LayerContainmentPolygon> vec_polygon(layer_graph.total_node_num);
 	vector<vector<LayerContainmentPolygon>> vec_hole_polygons(layer_graph.total_node_num);
@@ -7864,7 +8302,7 @@ void HybridManufacturing::DFS_search(Layer_Graph layer_graph, bool& flag_continu
 				&& IsPointWithinLayerZBand(
 					layer_graph.data.z_value[index_slice_layer.first][index_slice_layer.second][0],
 					V_2[j](2, 0),
-					dh,
+					dh * 0.5,
 					layer_z_slack)) {
 				sample_point_in_layer[i].push_back(j);	//V_2的第j个点在第i个layer中
 				judge_sample_point_be_searched[j] = true;	//标记该点需要被搜索
@@ -7883,62 +8321,82 @@ void HybridManufacturing::DFS_search(Layer_Graph layer_graph, bool& flag_continu
 	std::cout << "ori_num_points_of_ori_in_all_the_area_S.size()" << ori_num_points_of_ori_in_all_the_area_S.size() << std::endl;
 
 	std::vector<bool> area_s_layer_candidate(ori_num_points_of_ori_in_all_the_area_S.size(), false);
-	for (int i = 0; i < layer_graph.data.total_node_num; i++) {
-		pair<int, int> index_slice_layer = layer_graph.data.index[i];
-		for (int j = 0; j < ori_num_points_of_ori_in_all_the_area_S.size(); j++) {
-			if (map_S_and_vertex.find(j) == map_S_and_vertex.end()) {
-				//std::cout << "skipping area S " << j << " because it is not in the map_S_and_vertex." << std::endl;
-				continue;
-			}
-			if (judge_S_be_searched[j]) {
-				continue;
-			}
-
-			bool is_currently_accessible = false;
-			for (int k = 0; k < ori_num_points_of_ori_in_all_the_area_S[j].size(); ++k) {
-				if (ori_num_points_of_ori_in_all_the_area_S[j][k] < 0) {
-					cout << "error!!";
-				}
-				if (ori_num_points_of_ori_in_all_the_area_S[j][k] == 0) {
-					is_currently_accessible = true;
-					cout << "Area S " << j << " is currently accessible in layer " << i << std::endl;
-					break;
-				}
-			}
-			if (is_currently_accessible) {
-				//std::cout << "Area S " << j << " is currently accessible in layer " << i << ", skipping." << std::endl;
-				continue;
-			}
-			area_s_layer_candidate[j] = true;
-
-			Point_2 pp(V_2[map_S_and_vertex[j]](0, 0), V_2[map_S_and_vertex[j]](1, 0));
-			if (judge_S_be_searched[j] == false
-				&& IsPointInsidePreparedMaterialRegion(
-					vec_polygon[i], vec_hole_polygons[i], pp, layer_polygon_offset)
-				&& IsPointWithinLayerZBand(
-					layer_graph.data.z_value[index_slice_layer.first][index_slice_layer.second][0],
-					V_2[map_S_and_vertex[j]](2, 0),
-					dh,
-					layer_z_slack)) {
-				temp_all_S_in_the_block[i].push_back(j);
-				judge_S_be_searched[j] = true;	//标记该area S需要被搜索
-			}
+	for (int s_id = 0; s_id < static_cast<int>(ori_num_points_of_ori_in_all_the_area_S.size()); ++s_id) {
+		const auto map_it = map_S_and_vertex.find(s_id);
+		if (map_it == map_S_and_vertex.end() || judge_S_be_searched[s_id]) {
+			continue;
 		}
 
-
-		for (int j = 0; j < ori_all_the_covering_points.size(); j++) {
-			Point_2 pp(V_2[map_covering_points_and_vertex[j]](0, 0), V_2[map_covering_points_and_vertex[j]](1, 0));
-			if (judge_covering_points_be_searched[j] == false
-				&& IsPointWithinLayerZBand(
-					layer_graph.data.z_value[index_slice_layer.first][index_slice_layer.second][0],
-					V_2[map_covering_points_and_vertex[j]](2, 0),
-					dh,
-					layer_z_slack)
-				&& IsPointInsidePreparedMaterialRegion(
-					vec_polygon[i], vec_hole_polygons[i], pp, layer_polygon_offset)) {
-				temp_all_covering_points_in_the_block[i].push_back(j);
-				judge_covering_points_be_searched[j] = true;	//标记该covering point需要被搜索
+		bool is_currently_accessible = false;
+		for (int count : ori_num_points_of_ori_in_all_the_area_S[s_id]) {
+			if (count < 0) {
+				cout << "error!!";
 			}
+			if (count == 0) {
+				is_currently_accessible = true;
+				break;
+			}
+		}
+		if (is_currently_accessible) {
+			cout << "Area S " << s_id << " is currently accessible." << std::endl;
+			continue;
+		}
+		area_s_layer_candidate[s_id] = true;
+
+		const int vertex_id = map_it->second;
+		if (vertex_id < 0 || vertex_id >= static_cast<int>(V_2.size())) {
+			continue;
+		}
+		const Eigen::Vector3d point(
+			V_2[vertex_id](0, 0),
+			V_2[vertex_id](1, 0),
+			V_2[vertex_id](2, 0));
+		const std::vector<int> layer_ids = FindContainingExtrudedMaterialLayers(
+			layer_graph,
+			vec_polygon,
+			vec_hole_polygons,
+			point,
+			dh,
+			layer_z_slack,
+			layer_polygon_offset);
+		for (int layer_id : layer_ids) {
+			temp_all_S_in_the_block[layer_id].push_back(s_id);
+		}
+		if (!layer_ids.empty()) {
+			judge_S_be_searched[s_id] = true;
+		}
+	}
+
+	for (int covering_point_id = 0;
+		covering_point_id < static_cast<int>(ori_all_the_covering_points.size());
+		++covering_point_id) {
+		if (covering_point_id >= static_cast<int>(judge_covering_points_be_searched.size())
+			|| judge_covering_points_be_searched[covering_point_id]) {
+			continue;
+		}
+		const auto map_it = map_covering_points_and_vertex.find(covering_point_id);
+		if (map_it == map_covering_points_and_vertex.end()) {
+			continue;
+		}
+		const int vertex_id = map_it->second;
+		if (vertex_id < 0 || vertex_id >= static_cast<int>(V_2.size())) {
+			continue;
+		}
+		const Eigen::Vector3d point(
+			V_2[vertex_id](0, 0),
+			V_2[vertex_id](1, 0),
+			V_2[vertex_id](2, 0));
+		const int layer_id = FindContainingExtrudedMaterialLayer(
+			layer_graph,
+			vec_polygon,
+			vec_hole_polygons,
+			point,
+			dh,
+			layer_z_slack,
+			layer_polygon_offset);
+		if (layer_id >= 0) {
+			temp_all_covering_points_in_the_block[layer_id].push_back(covering_point_id);
+			judge_covering_points_be_searched[covering_point_id] = true;
 		}
 	}
 
@@ -7990,7 +8448,7 @@ void HybridManufacturing::DFS_search(Layer_Graph layer_graph, bool& flag_continu
 	}
 	std::cout << "temp_all_S_in_the_block_count: " << temp_all_S_in_the_block_count << std::endl;
 	//WriteDfsLayerContainmentDebugObj(
-	//	VisPath("access_debug_dfs_layer_area_s_relation_" + MakeAccessibilityDebugFileToken(file_name) + ".obj"),
+	//	UnaccessibleVisPath("access_debug_dfs_layer_area_s_relation_" + MakeAccessibilityDebugFileToken(file_name) + ".obj"),
 	//	vec_polygon,
 	//	vec_polygon_z,
 	//	assigned_area_s_layer_debug_points,
@@ -7999,7 +8457,7 @@ void HybridManufacturing::DFS_search(Layer_Graph layer_graph, bool& flag_continu
 	//	layer_polygon_offset,
 	//	layer_z_slack);
 	//WriteDebugMarkersObj(
-	//	VisPath("access_debug_temp_all_S_in_the_block_" + MakeAccessibilityDebugFileToken(file_name) + ".obj"),
+	//	UnaccessibleVisPath("access_debug_temp_all_S_in_the_block_" + MakeAccessibilityDebugFileToken(file_name) + ".obj"),
 	//	temp_all_S_in_the_block_points,
 	//	{ 0.05, 1.0, 1.0 },
 	//	std::max(0.12, dh * 0.08));
@@ -8175,6 +8633,9 @@ void HybridManufacturing::DFS_search(Layer_Graph layer_graph, bool& flag_continu
 			if (final_pathes_height[i] < final_pathes_height[j]) {
 				swap(final_pathes[i], final_pathes[j]);
 				swap(final_pathes_height[i], final_pathes_height[j]);
+				swap(pathes_include_S[i], pathes_include_S[j]);
+				swap(pathes_include_sample_points[i], pathes_include_sample_points[j]);
+				swap(paths_include_covering_points[i], paths_include_covering_points[j]);
 			}
 		}
 	while (final_pathes.size() > W2) {
@@ -8328,7 +8789,7 @@ void HybridManufacturing::sort_candidate_nodes(
 	OrientationScores& pure_value,
 	int id_continue)
 {
-	double W_less_area_S = 0, W_more_slice_layers = 0.6, W_covering_points = 0.4, W_less_clipping_plane = 0, W_fragile = 0, W_larger_base = 0, W_orientation = 0, W_projected = 0;
+	double W_less_area_S = 0, W_more_slice_layers = 0.4, W_covering_points = 0.6, W_less_clipping_plane = 0, W_fragile = 0, W_larger_base = 0, W_orientation = 0, W_projected = 0;
 
 	//double W_less_area_S = 0, W_more_slice_layers = 0.1, W_covering_points = 0.1, W_less_clipping_plane = 0.4, W_fragile = 0, W_larger_base = 0, W_orientation = 0.4, W_projected = 0;
 	//double W_less_area_S = 0, W_more_slice_layers = 0, W_covering_points = 0, W_less_clipping_plane = 0, W_fragile = 0, W_larger_base = 0, W_orientation = 0, W_projected = 1;
@@ -8345,22 +8806,22 @@ void HybridManufacturing::sort_candidate_nodes(
 		swap(all_calculated_value[0], all_calculated_value[rand_id]);
 		return;*/
 
-	for (int i = 0; i < all_calculated_value.size(); i++) {
-		if (all_calculated_value[i].number_of_remaining_face < terminate_threshold_of_number_of_faces && save_ori[candidate_nodes[i]][0].x() == 0 && save_ori[candidate_nodes[i]][0].y() == 0) {
-			swap(candidate_nodes[0], candidate_nodes[i]);
-			swap(all_calculated_value[0], all_calculated_value[i]);
-			cout << "Remaining face: " << all_calculated_value[i].number_of_remaining_face << endl;
-			return;
-		}
-	}
-	for (int i = 0; i < all_calculated_value.size(); i++) {
-		if (height_of_beam_search == 4 && save_ori[candidate_nodes[i]][0].x() == 0 && save_ori[candidate_nodes[i]][0].y() == 0) {
-			swap(candidate_nodes[0], candidate_nodes[i]);
-			swap(all_calculated_value[0], all_calculated_value[i]);
-			cout << "Remaining face: " << all_calculated_value[i].number_of_remaining_face << endl;
-			return;
-		}
-	}
+	// for (int i = 0; i < all_calculated_value.size(); i++) {
+	// 	if (all_calculated_value[i].number_of_remaining_face < terminate_threshold_of_number_of_faces && save_ori[candidate_nodes[i]][0].x() == 0 && save_ori[candidate_nodes[i]][0].y() == 0) {
+	// 		swap(candidate_nodes[0], candidate_nodes[i]);
+	// 		swap(all_calculated_value[0], all_calculated_value[i]);
+	// 		cout << "Remaining face: " << all_calculated_value[i].number_of_remaining_face << endl;
+	// 		return;
+	// 	}
+	// }
+	// for (int i = 0; i < all_calculated_value.size(); i++) {
+	// 	if (height_of_beam_search == 4 && save_ori[candidate_nodes[i]][0].x() == 0 && save_ori[candidate_nodes[i]][0].y() == 0) {
+	// 		swap(candidate_nodes[0], candidate_nodes[i]);
+	// 		swap(all_calculated_value[0], all_calculated_value[i]);
+	// 		cout << "Remaining face: " << all_calculated_value[i].number_of_remaining_face << endl;
+	// 		return;
+	// 	}
+	// }
 
 	/*if(height_of_beam_search == 2)
 		W_less_area_S = 0, W_more_slice_layers = 0.1, W_covering_points = 0.1, W_less_clipping_plane = 0.8, W_fragile = 0, W_larger_base = 0;*/
@@ -8560,7 +9021,7 @@ void HybridManufacturing::sort_candidate_nodes(
 					+ value.value_of_fragile * W_fragile
 					+ value.value_of_orientation * W_orientation
 					+ value.value_of_projected * W_projected
-					+ value.value_of_sub_patches * 0.5;
+					+ value.value_of_sub_patches * 0.0;
 				};
 
 			if (calc_score(i) < calc_score(j)) {
@@ -8684,7 +9145,10 @@ void HybridManufacturing::sort_candidate_nodes(vector<int>& candidate_nodes, vec
 
 void HybridManufacturing::subtractive_remove_output(const vector<TRiangle>& need_detect_triangle, const Slicer_2& current_slicer, int height_of_beam_search, int cont_number_of_queue)
 {
-	std::string filename = VisPath("block_patch-" + to_string(height_of_beam_search) + "_" + to_string(cont_number_of_queue) + ".obj");
+	std::string filename = PatchVisPath(
+		"block_patch-" + to_string(height_of_beam_search)
+		+ "_" + to_string(cont_number_of_queue)
+		+ ".obj");
 	std::ofstream file(filename);
 	if (!file)
 	{

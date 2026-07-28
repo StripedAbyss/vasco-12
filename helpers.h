@@ -168,4 +168,24 @@ inline static int GetIniInt(const IniData& ini,
 	}
 }
 
+inline static double GetIniDouble(const IniData& ini,
+	const std::string& section,
+	const std::string& key,
+	double defaultValue)
+{
+	const std::string value = GetIniString(ini, section, key);
+	if (value.empty()) {
+		return defaultValue;
+	}
+
+	try {
+		return std::stod(value);
+	}
+	catch (...) {
+		std::cerr << "[LoadIni] Invalid number for [" << section << "] "
+			<< key << "=" << value << ", use default " << defaultValue << std::endl;
+		return defaultValue;
+	}
+}
+
 #endif

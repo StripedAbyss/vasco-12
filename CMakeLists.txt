@@ -63,6 +63,7 @@ find_package(OpenCV CONFIG REQUIRED)
 
 # 工程源文件
 set(SRC_FILES
+  AccessibilityVisualization.cpp
   data.cpp
   edge.cpp
   GeneralMesh.cpp
@@ -98,6 +99,7 @@ set(SRC_FILES
 )
 
 set(HDR_FILES
+  AccessibilityVisualization.h
   HybridManufacturing.h
   MeshPlaneIntersect.hpp
   katana/config.h

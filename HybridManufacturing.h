@@ -222,7 +222,8 @@ public:
 		bool & jud_error,
 		int id_node,
 		int id_continue,
-		vector<int> flag_cut_layers_is_hole);
+		vector<int> flag_cut_layers_is_hole,
+		const vector<bool>& judge_S_be_searched);
 
 	int subtractive_accessibility_decomposition(
 		vector<TRiangle> need_detect_triangle,
@@ -234,6 +235,21 @@ public:
 	//void subtractive_accessibility_decomposition(vector<TRiangle> need_detect_triangle, int height_of_beam_search, int cont_number_of_queue, cutter cutting_tool, Slicer_2 current_slicer);
 	void subtractive_accessibility_decomposition_global(int height_of_beam_search, cutter cutting_tool);
 	int subtractive_accessibility_decomposition_local(int height_of_beam_search, cutter cutting_tool);
+	void subtractive_accessibility_decomposition_local_initialized_global(
+		int height_of_beam_search,
+		cutter cutting_tool);
+	void subtractive_accessibility_decomposition_random_multistart_global(
+		int height_of_beam_search,
+		cutter cutting_tool,
+		int restart_count,
+		unsigned int random_seed,
+		int thread_count);
+	int subtractive_accessibility_decomposition_random_multistart_local(
+		int height_of_beam_search,
+		cutter cutting_tool,
+		int restart_count,
+		unsigned int random_seed,
+		int thread_count);
 
 	vector<vector<int>> getAccessOri(
 		const Slicer_2& slicer,
@@ -274,10 +290,31 @@ public:
 	bool open_change_orientation;
 	bool open_vis_stair_case;
 	bool open_vis_additive_accessibility_debug;
+	bool open_vis_additive_self_support_debug;
+	double graph_cut_block_boundary_overlap_cost_per_unit = 10.0;
 
 private:
+	void RunSubtractiveAccessibilityDecompositionGlobal(
+		int height_of_beam_search,
+		cutter cutting_tool,
+		bool initialize_with_local_labels,
+		int random_restart_count,
+		unsigned int random_seed,
+		int random_thread_count);
+	int RunSubtractiveAccessibilityDecompositionLocal(
+		int height_of_beam_search,
+		cutter cutting_tool,
+		int random_restart_count,
+		unsigned int random_seed,
+		int random_thread_count);
+
 	std::string VisDir() const;
 	std::string VisPath(const std::string& file_name) const;
+	std::string UnaccessibleVisDir() const;
+	std::string UnaccessibleVisPath(const std::string& file_name) const;
+	std::string PatchVisDir() const;
+	std::string PatchVisPath(const std::string& file_name) const;
+	std::string AncestorSourceVisPath(const std::string& file_name) const;
 
 	void InitializeSurfaceMeshFromVF();
 	bool PrepareOuterBeamSearchNode(
@@ -510,8 +547,7 @@ private:
 	std::vector<std::vector<int>> EvaluateMergedPatchToolCollision(
 		const Slicer_2& merged_patch,
 		const std::vector<int>& merged_face_source_patch_id,
-		cutter cutting_tool,
-		bool is_local) const;
+		cutter cutting_tool) const;
 
 	Slicer_2 MergeBlockPatchesWithDedup(
 		int max_patch_index,

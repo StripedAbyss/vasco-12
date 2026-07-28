@@ -4204,6 +4204,9 @@ std::vector<std::vector<int>> HybridManufacturing::EvaluateMergedPatchToolCollis
 					if (ii < static_cast<int>(merged_face_source_patch_id.size())) {
 						max_patch_idx = std::max(max_patch_idx, merged_face_source_patch_id[ii]);
 					}
+					else {
+						max_patch_idx = std::max(max_patch_idx, -2);
+					}
 				}
 			}
 
